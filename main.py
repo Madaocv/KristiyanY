@@ -30,8 +30,8 @@ def read_csv_to_pandas(file_path):
     first_column_name = df.columns[0]
     first_column_df = df[[first_column_name]].copy()
 
-    ows = first_column_df.iloc[1:500]
-    return ows
+    # ows = first_column_df.iloc[1:500]
+    return first_column_df
 
 async def fetch_url(session, url, timeout=10):
     headers = {
@@ -56,84 +56,116 @@ async def fetch_url(session, url, timeout=10):
 
 def extract_sentences_from_all_tags(html_content, keywords):
     """
-    Аналізує HTML, шукає ключові слова та витягує текст із батьківського тега
-    або батьківського parent.parent для <a> тегу.
+    Аналізує HTML, шукає ключові слова та витягує текст із батьківського тега,
+    а також попередні та наступні речення.
 
     Args:
         html_content (str): HTML-контент сторінки.
         keywords (list): Список ключових слів.
 
     Returns:
-        dict: Словник із ключовими словами ('kw in text') і знайденими текстами ('sentence').
+        dict: Словник із ключовими словами ('kw in text') і знайденими текстами ('sentence', 'sentence-1', 'sentence+1').
     """
     if isinstance(html_content, bytes):
         html_content = html_content.decode('utf-8', errors='ignore')
 
     soup = BeautifulSoup(html_content, 'html.parser')
     if not soup.body:
-        print("No <body> tag found in the HTML content.:")
-        return {"kw in text": [], "sentence": [], "link_inside_sentence": False}
-    # Results
+        print("No <body> tag found in the HTML content.")
+        return {
+            "kw in text": [],
+            "sentence": "",
+            "sentence-1": "",
+            "sentence+1": "",
+            "link_inside_sentence": False,
+        }
+
     found_keywords = []
     matched_sentences = []
+    previous_sentences = []
+    next_sentences = []
     link_inside_sentence = False
+
+    def get_sibling_text(tag, direction):
+        """
+        Шукає сусідній текстовий елемент (попередній або наступний) на тому ж рівні.
+        """
+        sibling = tag.find_previous_sibling() if direction == "prev" else tag.find_next_sibling()
+        while sibling:
+            if sibling.get_text(strip=True):
+                return sibling.get_text(separator=" ", strip=True)
+            sibling = sibling.find_previous_sibling() if direction == "prev" else sibling.find_next_sibling()
+        return None
 
     for tag_to_remove in soup.find_all(["strong", "em", "b", "i", "u"]):
         tag_to_remove.unwrap()
 
-    # Проходимо по всіх текстових елементах
     for tag in soup.body.find_all(string=True):
         text = tag.strip()
-        # pass the empty tags
         if not text:
             continue
-        # Checking keywoard in text
+
         for keyword in keywords:
             if keyword in text:
-                # Add keyword if brand new
                 if keyword not in found_keywords:
                     found_keywords.append(keyword)
+
                 if tag.parent.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
                     parent_tag = tag.parent
-                    parent_text = parent_tag.get_text(separator=" ", strip=True)
-                    # split text on sentences
-                    sentences = re.split(r'(?<=[.!?])\s+', parent_text)
-                    # Додаємо релевантне речення разом із тегами
-                    for sentence in sentences:
-                        if keyword in sentence:
-                            sentence_with_tags = f"<{parent_tag.name}>{sentence.strip()}</{parent_tag.name}>"
-                            if sentence_with_tags not in matched_sentences:
-                                matched_sentences.append(sentence_with_tags)
-                            break
+                    sentence_with_tags = f"<{parent_tag.name}>{parent_tag.get_text(strip=True)}</{parent_tag.name}>"
+                    matched_sentences.append(sentence_with_tags)
+                    prev_text = get_sibling_text(parent_tag, "prev")
+                    next_text = get_sibling_text(parent_tag, "next")
+                    if prev_text:
+                        previous_sentences.append(prev_text)
+                    if next_text:
+                        next_sentences.append(next_text)
                     continue
-                # Якщо це текст із <a>, беремо контекст на 2 рівні вгору
+
                 if tag.parent.name == "a" and tag.parent.parent:
                     parent_tag = tag.parent.parent
                 else:
-                    # Інакше беремо стандартний батьківський тег
                     parent_tag = tag.parent
 
-                # Отримуємо весь текст із батьківського тега
                 parent_text = parent_tag.get_text(separator=" ", strip=True)
-
-                # Розбиваємо текст на речення
                 sentences = re.split(r'(?<=[.!?])\s+', parent_text)
 
-                # Фільтруємо речення, що містять ключове слово
-                relevant_sentences = [
-                    sentence.strip() for sentence in sentences if keyword in sentence
-                ]
-                for sentence in relevant_sentences:
-                    if parent_tag.find("a"):
-                        link_inside_sentence = True
-                # Додаємо лише релевантні речення
-                for sentence in relevant_sentences:
-                    if sentence not in matched_sentences:
-                        matched_sentences.append(sentence)
+                for i, sentence in enumerate(sentences):
+                    if keyword in sentence:
+                        matched_sentences.append(sentence.strip())
+                        if parent_tag.find("a"):
+                            link_inside_sentence = True
 
-                break  # Переходимо до наступного текстового елемента
+                        # Перевіряємо попередні речення на поточному рівні
+                        has_local_prev = False
+                        if i > 0 and sentences[i - 1].strip() not in previous_sentences:
+                            previous_sentences.append(sentences[i - 1].strip())
+                            has_local_prev = True
 
-    return {"kw in text": found_keywords, "sentence": "\n".join(matched_sentences), "link_inside_sentence": link_inside_sentence}
+                        # Перевіряємо наступні речення на поточному рівні
+                        has_local_next = False
+                        if i < len(sentences) - 1 and sentences[i + 1].strip() not in next_sentences:
+                            next_sentences.append(sentences[i + 1].strip())
+                            has_local_next = True
+
+                        # Якщо на поточному рівні речень немає, шукаємо серед сусідніх елементів
+                        if not has_local_prev:
+                            prev_text = get_sibling_text(parent_tag, "prev")
+                            if prev_text:
+                                previous_sentences.append(prev_text)
+
+                        if not has_local_next:
+                            next_text = get_sibling_text(parent_tag, "next")
+                            if next_text:
+                                next_sentences.append(next_text)
+
+    return {
+        "kw in text": found_keywords,
+        "sentence": "\n".join(matched_sentences),
+        "sentence-1": "\n".join(filter(None, previous_sentences)),
+        "sentence+1": "\n".join(filter(None, next_sentences)),
+        "link_inside_sentence": link_inside_sentence,
+    }
 
 async def process_urls_with_keywords(df, input_keywords, semaphore_limit=100):
     semaphore = asyncio.Semaphore(semaphore_limit)
@@ -145,7 +177,7 @@ async def process_urls_with_keywords(df, input_keywords, semaphore_limit=100):
                 result = extract_sentences_from_all_tags(content, keywords)
                 result["status"] = status
                 return result
-            return {"kw in text": [], "sentence": [], "link_inside_sentence": False, "status": status}
+            return {"kw in text": [], "sentence": [], "sentence-1": [], "sentence+1": [], "link_inside_sentence": False, "status": status}
 
     async with aiohttp.ClientSession() as session:
         tasks = [process_url(session, url, input_keywords) for url in df.iloc[:, 0]]
@@ -153,10 +185,18 @@ async def process_urls_with_keywords(df, input_keywords, semaphore_limit=100):
     df["response status codes"] = [result["status"] for result in results]
     df["Link inside sentence"] = [result["link_inside_sentence"] for result in results]
     df["kw in text"] = [result.get("kw in text", []) if result else [] for result in results]
+    df["sentence -1"] = [result["sentence-1"] for result in results]
     df["sentence"] = [result["sentence"] for result in results]
+    df["sentence +1"] = [result["sentence+1"] for result in results]
     return df
 
+def remove_illegal_characters(value):
+    if isinstance(value, str):
+        return ''.join(char for char in value if ord(char) >= 32 or char == '\n')
+    return value
+
 def save_to_excel(df, output_file):
+    df = df.applymap(remove_illegal_characters)
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Results")
     print(f"Result saved into {output_file}")
@@ -166,9 +206,9 @@ def main(file_path):
     input_keywords = ["art portfolio" , "website ideas" , "idea for a website" , "website design" , "mobile-friendly design" , "restaurant website" , "website for a restaurant" , "online store" , "website builder"]
     df = process_keywords_in_url(df, input_keywords)
     df = asyncio.run(process_urls_with_keywords(df, input_keywords))
-    # save_to_excel(df, 'Initial_test_04_12.xlsx')
-    df.to_csv('test_x1.csv')
-    print(df.head(20))
+    save_to_excel(df, 'Initial_test_05_12_v5.xlsx')
+    df.to_csv('Initial_test_05_12_v5.csv')
+    # print(df.head(20))
     # i1 = 11
     # i2 = 12
     # value = df.iloc[i1]['sentence']
