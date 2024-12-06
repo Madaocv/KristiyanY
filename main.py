@@ -85,7 +85,7 @@ def extract_sentences_from_all_tags(html_content, keywords):
 
     def get_sibling_text(tag, direction):
         """
-        Searvh neibour text element (next or prev) in same embedded level.
+        Searches for a neighboring text element (next or prev) on the same embedded level.
         """
         sibling = tag.find_previous_sibling() if direction == "prev" else tag.find_next_sibling()
         while sibling:
@@ -107,15 +107,11 @@ def extract_sentences_from_all_tags(html_content, keywords):
                 if keyword not in found_keywords:
                     found_keywords.append(keyword)
 
-                is_linked = False
-                if tag.parent.name == "a":
-                    is_linked = True
-                link_inside_sentence.append(is_linked)
-
                 if tag.parent.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
                     parent_tag = tag.parent
                     sentence_with_tags = f"<{parent_tag.name}>{parent_tag.get_text(strip=True)}</{parent_tag.name}>"
                     matched_sentences.append(sentence_with_tags)
+                    link_inside_sentence.append(tag.parent.name == "a")
                     prev_text = get_sibling_text(parent_tag, "prev")
                     next_text = get_sibling_text(parent_tag, "next")
                     if prev_text:
@@ -135,6 +131,7 @@ def extract_sentences_from_all_tags(html_content, keywords):
                 for i, sentence in enumerate(sentences):
                     if keyword in sentence:
                         matched_sentences.append(sentence.strip())
+                        link_inside_sentence.append(tag.parent.name == "a")
 
                         # Check previous sentences at the current embedded level
                         has_local_prev = False
@@ -148,7 +145,7 @@ def extract_sentences_from_all_tags(html_content, keywords):
                             next_sentences.append(sentences[i + 1].strip())
                             has_local_next = True
 
-                        # If no results on current level, search between neibours
+                        # If no results on current level, search between neighbors
                         if not has_local_prev:
                             prev_text = get_sibling_text(parent_tag, "prev")
                             if prev_text:
@@ -164,7 +161,7 @@ def extract_sentences_from_all_tags(html_content, keywords):
         "sentence": "\n".join(matched_sentences),
         "sentence-1": "\n".join(filter(None, previous_sentences)),
         "sentence+1": "\n".join(filter(None, next_sentences)),
-        "link_inside_sentence": "\n".join([str(obj) for obj in link_inside_sentence]),
+        "link_inside_sentence": "\n".join([f"{idx}. {obj}" for idx, obj in enumerate(link_inside_sentence, start=1)]),
     }
 
 async def process_urls_with_keywords(df, input_keywords, semaphore_limit=100):
@@ -177,7 +174,7 @@ async def process_urls_with_keywords(df, input_keywords, semaphore_limit=100):
                 result = extract_sentences_from_all_tags(content, keywords)
                 result["status"] = status
                 return result
-            return {"kw in text": [], "sentence": [], "sentence-1": [], "sentence+1": [], "link_inside_sentence": False, "status": status}
+            return {"kw in text": "", "sentence": "", "sentence-1": "", "sentence+1": "", "link_inside_sentence": "", "status": status}
 
     async with aiohttp.ClientSession() as session:
         tasks = [process_url(session, url, input_keywords) for url in df.iloc[:, 0]]
