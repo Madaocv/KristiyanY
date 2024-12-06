@@ -1,9 +1,7 @@
 import pandas as pd
 import asyncio
 import aiohttp
-from aiohttp import ClientSession
 from tqdm.asyncio import tqdm_asyncio
-import time
 import logging
 import warnings
 import argparse
@@ -12,6 +10,7 @@ import aiohttp
 import asyncio
 from bs4 import BeautifulSoup
 import re
+import os
 
 logging.getLogger('aiohttp').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning, module='aiohttp')
@@ -56,39 +55,37 @@ async def fetch_url(session, url, timeout=10):
 
 def extract_sentences_from_all_tags(html_content, keywords):
     """
-    Аналізує HTML, шукає ключові слова та витягує текст із батьківського тега,
-    а також попередні та наступні речення.
+    Parses HTML, searches for keywords, and extracts text from the parent tag, as well as the previous and next sentences.
 
     Args:
-        html_content (str): HTML-контент сторінки.
-        keywords (list): Список ключових слів.
+        html_content (str): The HTML content of the page.
+        keywords (list): A list of keywords.
 
     Returns:
-        dict: Словник із ключовими словами ('kw in text') і знайденими текстами ('sentence', 'sentence-1', 'sentence+1').
+        dict: A dictionary with keywords ('kw in text') and found texts ('sentence', 'sentence-1', 'sentence+1').
     """
     if isinstance(html_content, bytes):
         html_content = html_content.decode('utf-8', errors='ignore')
 
     soup = BeautifulSoup(html_content, 'html.parser')
     if not soup.body:
-        print("No <body> tag found in the HTML content.")
         return {
             "kw in text": [],
             "sentence": "",
             "sentence-1": "",
             "sentence+1": "",
-            "link_inside_sentence": False,
+            "link_inside_sentence": "",
         }
 
     found_keywords = []
     matched_sentences = []
     previous_sentences = []
     next_sentences = []
-    link_inside_sentence = False
+    link_inside_sentence = []
 
     def get_sibling_text(tag, direction):
         """
-        Шукає сусідній текстовий елемент (попередній або наступний) на тому ж рівні.
+        Searvh neibour text element (next or prev) in same embedded level.
         """
         sibling = tag.find_previous_sibling() if direction == "prev" else tag.find_next_sibling()
         while sibling:
@@ -109,6 +106,11 @@ def extract_sentences_from_all_tags(html_content, keywords):
             if keyword in text:
                 if keyword not in found_keywords:
                     found_keywords.append(keyword)
+
+                is_linked = False
+                if tag.parent.name == "a":
+                    is_linked = True
+                link_inside_sentence.append(is_linked)
 
                 if tag.parent.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
                     parent_tag = tag.parent
@@ -133,22 +135,20 @@ def extract_sentences_from_all_tags(html_content, keywords):
                 for i, sentence in enumerate(sentences):
                     if keyword in sentence:
                         matched_sentences.append(sentence.strip())
-                        if parent_tag.find("a"):
-                            link_inside_sentence = True
 
-                        # Перевіряємо попередні речення на поточному рівні
+                        # Check previous sentences at the current embedded level
                         has_local_prev = False
                         if i > 0 and sentences[i - 1].strip() not in previous_sentences:
                             previous_sentences.append(sentences[i - 1].strip())
                             has_local_prev = True
 
-                        # Перевіряємо наступні речення на поточному рівні
+                        # Check next sentences at the current embedded level
                         has_local_next = False
                         if i < len(sentences) - 1 and sentences[i + 1].strip() not in next_sentences:
                             next_sentences.append(sentences[i + 1].strip())
                             has_local_next = True
 
-                        # Якщо на поточному рівні речень немає, шукаємо серед сусідніх елементів
+                        # If no results on current level, search between neibours
                         if not has_local_prev:
                             prev_text = get_sibling_text(parent_tag, "prev")
                             if prev_text:
@@ -164,7 +164,7 @@ def extract_sentences_from_all_tags(html_content, keywords):
         "sentence": "\n".join(matched_sentences),
         "sentence-1": "\n".join(filter(None, previous_sentences)),
         "sentence+1": "\n".join(filter(None, next_sentences)),
-        "link_inside_sentence": link_inside_sentence,
+        "link_inside_sentence": "\n".join([str(obj) for obj in link_inside_sentence]),
     }
 
 async def process_urls_with_keywords(df, input_keywords, semaphore_limit=100):
@@ -182,12 +182,12 @@ async def process_urls_with_keywords(df, input_keywords, semaphore_limit=100):
     async with aiohttp.ClientSession() as session:
         tasks = [process_url(session, url, input_keywords) for url in df.iloc[:, 0]]
         results = await tqdm_asyncio.gather(*tasks)
-    df["response status codes"] = [result["status"] for result in results]
+    df["Response Status Code"] = [result["status"] for result in results]
+    df["Keyword in text"] = [result.get("kw in text", []) if result else [] for result in results]
     df["Link inside sentence"] = [result["link_inside_sentence"] for result in results]
-    df["kw in text"] = [result.get("kw in text", []) if result else [] for result in results]
-    df["sentence -1"] = [result["sentence-1"] for result in results]
-    df["sentence"] = [result["sentence"] for result in results]
-    df["sentence +1"] = [result["sentence+1"] for result in results]
+    df["Sentence -1"] = [result["sentence-1"] for result in results]
+    df["Sentence"] = [result["sentence"] for result in results]
+    df["Sentence +1"] = [result["sentence+1"] for result in results]
     return df
 
 def remove_illegal_characters(value):
@@ -201,23 +201,17 @@ def save_to_excel(df, output_file):
         df.to_excel(writer, index=False, sheet_name="Results")
     print(f"Result saved into {output_file}")
 
-def main(file_path):
-    df = read_csv_to_pandas(file_path)
-    input_keywords = ["art portfolio" , "website ideas" , "idea for a website" , "website design" , "mobile-friendly design" , "restaurant website" , "website for a restaurant" , "online store" , "website builder"]
+def main(input_path=None, output_file=None, input_keywords=None):
+    input_path = os.path.abspath(input_path)
+    output_file = os.path.abspath(output_file)
+    df = read_csv_to_pandas(input_path)
     df = process_keywords_in_url(df, input_keywords)
     df = asyncio.run(process_urls_with_keywords(df, input_keywords))
-    save_to_excel(df, 'Initial_test_05_12_v5.xlsx')
-    df.to_csv('Initial_test_05_12_v5.csv')
-    # print(df.head(20))
-    # i1 = 11
-    # i2 = 12
-    # value = df.iloc[i1]['sentence']
-    # value2 = df.iloc[i2]['sentence']
-    # print("-"*50)
-    # print(value, df.iloc[i1]['Webiste'])
-    # print("-"*50)
-    # print(value2, df.iloc[i1]['Webiste'])
-    # print("-"*50)
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    save_to_excel(df, output_file)
+    print("*"*50)
+    print(f"Results saved to: {output_file}")
+    print("*"*50)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Keywords handler")
@@ -232,7 +226,11 @@ if __name__ == "__main__":
         if not isinstance(input_keywords, list):
             raise ValueError("input_keywords should be a list")
     except Exception as e:
-        raise ValueError("Wrong format input_keywords. Use this one ['word1', 'word2', ...]") from e
-    # main("/Users/olegeliiashiv/Downloads/Template 2 - Sheet6.csv")
-    main(args.input_path)
+        raise ValueError('Wrong format input_keywords. Use this one ["word1", "word2", ...]') from e
 
+    main_args = {
+        "input_path" : args.input_path,
+        "output_file": args.output_file,
+        "input_keywords" : ast.literal_eval(args.input_keywords)
+    }
+    main(**main_args)
