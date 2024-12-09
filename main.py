@@ -32,7 +32,7 @@ def read_csv_to_pandas(file_path):
     # ows = first_column_df.iloc[1:500]
     return first_column_df
 
-async def fetch_url(session, url, timeout=10):
+async def fetch_url(session, url, timeout=20):
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -76,6 +76,10 @@ def extract_sentences_from_all_tags(html_content, keywords):
             "sentence+1": "",
             "link_inside_sentence": "",
         }
+
+    # Remove all <script> tags with the content
+    for script_tag in soup.find_all("script"):
+        script_tag.decompose()
 
     found_keywords = []
     matched_sentences = []
