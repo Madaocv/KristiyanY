@@ -32,7 +32,7 @@ def read_csv_to_pandas(file_path):
     # ows = first_column_df.iloc[1:500]
     return first_column_df
 
-async def fetch_url(session, url, timeout=20):
+async def fetch_url(session, url, timeout=30):
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -87,15 +87,43 @@ def extract_sentences_from_all_tags(html_content, keywords):
     next_sentences = []
     link_inside_sentence = []
 
-    def get_sibling_text(tag, direction):
+    def get_sibling_text(tag, direction, max_attempts=5):
         """
         Searches for a neighboring text element (next or prev) on the same embedded level.
+        If no text is found, continues searching in higher-level elements up to `max_attempts`.
         """
         sibling = tag.find_previous_sibling() if direction == "prev" else tag.find_next_sibling()
-        while sibling:
-            if sibling.get_text(strip=True):
-                return sibling.get_text(separator=" ", strip=True)
+        attempts = 0
+
+        while sibling and attempts < max_attempts:
+            text = sibling.get_text(strip=True)
+            if text:
+                # Split text into sentences
+                sentences = re.split(r'(?<=[.!?])\s+', text)
+                # Return the appropriate sentence
+                if direction == "prev":
+                    return sentences[-1].strip() if sentences else None
+                else:
+                    return sentences[0].strip() if sentences else None
             sibling = sibling.find_previous_sibling() if direction == "prev" else sibling.find_next_sibling()
+            attempts += 1
+
+        # If nothing is found, check parent siblings
+        parent = tag.parent
+        while parent and attempts < max_attempts:
+            sibling = parent.find_previous_sibling() if direction == "prev" else parent.find_next_sibling()
+            while sibling:
+                text = sibling.get_text(strip=True)
+                if text:
+                    sentences = re.split(r'(?<=[.!?])\s+', text)
+                    if direction == "prev":
+                        return sentences[-1].strip() if sentences else None
+                    else:
+                        return sentences[0].strip() if sentences else None
+                sibling = sibling.find_previous_sibling() if direction == "prev" else sibling.find_next_sibling()
+            parent = parent.parent
+            attempts += 1
+
         return None
 
     for tag_to_remove in soup.find_all(["strong", "em", "b", "i", "u"]):
@@ -118,10 +146,8 @@ def extract_sentences_from_all_tags(html_content, keywords):
                     link_inside_sentence.append(tag.parent.name == "a")
                     prev_text = get_sibling_text(parent_tag, "prev")
                     next_text = get_sibling_text(parent_tag, "next")
-                    if prev_text:
-                        previous_sentences.append(prev_text)
-                    if next_text:
-                        next_sentences.append(next_text)
+                    previous_sentences.append(prev_text if prev_text else "")
+                    next_sentences.append(next_text if next_text else "")
                     continue
 
                 if tag.parent.name == "a" and tag.parent.parent:
@@ -137,28 +163,18 @@ def extract_sentences_from_all_tags(html_content, keywords):
                         matched_sentences.append(sentence.strip())
                         link_inside_sentence.append(tag.parent.name == "a")
 
-                        # Check previous sentences at the current embedded level
-                        has_local_prev = False
-                        if i > 0 and sentences[i - 1].strip() not in previous_sentences:
-                            previous_sentences.append(sentences[i - 1].strip())
-                            has_local_prev = True
+                        # Ensure the same number of sentences for previous and next
+                        prev_sentence = sentences[i - 1].strip() if i > 0 else get_sibling_text(parent_tag, "prev")
+                        next_sentence = sentences[i + 1].strip() if i < len(sentences) - 1 else get_sibling_text(parent_tag, "next")
 
-                        # Check next sentences at the current embedded level
-                        has_local_next = False
-                        if i < len(sentences) - 1 and sentences[i + 1].strip() not in next_sentences:
-                            next_sentences.append(sentences[i + 1].strip())
-                            has_local_next = True
+                        previous_sentences.append(prev_sentence if prev_sentence else "")
+                        next_sentences.append(next_sentence if next_sentence else "")
 
-                        # If no results on current level, search between neighbors
-                        if not has_local_prev:
-                            prev_text = get_sibling_text(parent_tag, "prev")
-                            if prev_text:
-                                previous_sentences.append(prev_text)
-
-                        if not has_local_next:
-                            next_text = get_sibling_text(parent_tag, "next")
-                            if next_text:
-                                next_sentences.append(next_text)
+    # Ensure equal counts for sentences
+    max_count = max(len(matched_sentences), len(previous_sentences), len(next_sentences))
+    previous_sentences.extend([""] * (max_count - len(previous_sentences)))
+    next_sentences.extend([""] * (max_count - len(next_sentences)))
+    link_inside_sentence.extend([False] * (max_count - len(link_inside_sentence)))
 
     return {
         "kw in text": found_keywords,
