@@ -11,6 +11,16 @@ import asyncio
 from bs4 import BeautifulSoup
 import re
 import os
+from openpyxl.utils import get_column_letter
+from urllib.parse import urlparse
+from openpyxl.utils.exceptions import IllegalCharacterError
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import PatternFill, Font
+import pandas as pd
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import PatternFill, Font
 
 logging.getLogger('aiohttp').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning, module='aiohttp')
@@ -53,13 +63,14 @@ async def fetch_url(session, url, timeout=30):
     except Exception as e:
         return 500, None  # 500: Internal Server Error
 
-def extract_sentences_from_all_tags(html_content, keywords):
+def extract_sentences_from_all_tags(html_content, keywords, title_keywords):
     """
     Parses HTML, searches for keywords, and extracts text from the parent tag, as well as the previous and next sentences.
 
     Args:
         html_content (str): The HTML content of the page.
         keywords (list): A list of keywords.
+        title_keywords (list): A list of keywords to check in <h1> tags.
 
     Returns:
         dict: A dictionary with keywords ('kw in text') and found texts ('sentence', 'sentence-1', 'sentence+1').
@@ -75,7 +86,14 @@ def extract_sentences_from_all_tags(html_content, keywords):
             "sentence-1": "",
             "sentence+1": "",
             "link_inside_sentence": "",
+            "kw in title": [],
+            "1.1 kw in title": False,
+            "Word count": 0,
         }
+
+    # Convert keywords and title_keywords to lowercase
+    keywords = [kw.lower() for kw in keywords]
+    title_keywords = [kw.lower() for kw in title_keywords]
 
     # Remove all <script> tags with the content
     for script_tag in soup.find_all("script"):
@@ -87,6 +105,15 @@ def extract_sentences_from_all_tags(html_content, keywords):
     next_sentences = []
     link_inside_sentence = []
 
+    # Check for title_keywords in <h1>
+    h1_text = " ".join(h1.get_text(separator=" ", strip=True).lower() for h1 in soup.find_all("h1"))
+    found_title_keywords = [kw for kw in title_keywords if kw in h1_text]
+    has_title_keyword = bool(found_title_keywords)
+
+    # Word count in the filtered body
+    body_text = soup.body.get_text(separator=" ", strip=True).lower()
+    word_count = len(body_text.split())
+
     def get_sibling_text(tag, direction, max_attempts=5):
         """
         Searches for a neighboring text element (next or prev) on the same embedded level.
@@ -96,7 +123,7 @@ def extract_sentences_from_all_tags(html_content, keywords):
         attempts = 0
 
         while sibling and attempts < max_attempts:
-            text = sibling.get_text(strip=True)
+            text = sibling.get_text(strip=True).lower()
             if text:
                 # Split text into sentences
                 sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -113,7 +140,7 @@ def extract_sentences_from_all_tags(html_content, keywords):
         while parent and attempts < max_attempts:
             sibling = parent.find_previous_sibling() if direction == "prev" else parent.find_next_sibling()
             while sibling:
-                text = sibling.get_text(strip=True)
+                text = sibling.get_text(strip=True).lower()
                 if text:
                     sentences = re.split(r'(?<=[.!?])\s+', text)
                     if direction == "prev":
@@ -130,19 +157,17 @@ def extract_sentences_from_all_tags(html_content, keywords):
         tag_to_remove.unwrap()
 
     for tag in soup.body.find_all(string=True):
-        text = tag.strip()
+        text = tag.strip().lower()
         if not text:
             continue
 
         for keyword in keywords:
             if keyword in text:
-                if keyword not in found_keywords:
-                    found_keywords.append(keyword)
-
                 if tag.parent.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
                     parent_tag = tag.parent
                     sentence_with_tags = f"<{parent_tag.name}>{parent_tag.get_text(strip=True)}</{parent_tag.name}>"
                     matched_sentences.append(sentence_with_tags)
+                    found_keywords.append(keyword)
                     link_inside_sentence.append(tag.parent.name == "a")
                     prev_text = get_sibling_text(parent_tag, "prev")
                     next_text = get_sibling_text(parent_tag, "next")
@@ -155,12 +180,13 @@ def extract_sentences_from_all_tags(html_content, keywords):
                 else:
                     parent_tag = tag.parent
 
-                parent_text = parent_tag.get_text(separator=" ", strip=True)
+                parent_text = parent_tag.get_text(separator=" ", strip=True).lower()
                 sentences = re.split(r'(?<=[.!?])\s+', parent_text)
 
                 for i, sentence in enumerate(sentences):
                     if keyword in sentence:
                         matched_sentences.append(sentence.strip())
+                        found_keywords.append(keyword)
                         link_inside_sentence.append(tag.parent.name == "a")
 
                         # Ensure the same number of sentences for previous and next
@@ -178,54 +204,168 @@ def extract_sentences_from_all_tags(html_content, keywords):
 
     return {
         "kw in text": found_keywords,
-        "sentence": "\n".join(matched_sentences),
-        "sentence-1": "\n".join(filter(None, previous_sentences)),
-        "sentence+1": "\n".join(filter(None, next_sentences)),
-        "link_inside_sentence": "\n".join([f"{idx}. {obj}" for idx, obj in enumerate(link_inside_sentence, start=1)]),
+        "sentence": matched_sentences,
+        "sentence-1": previous_sentences,
+        "sentence+1": next_sentences,
+        "link_inside_sentence": link_inside_sentence,
+        "kw in title": found_title_keywords,
+        "1.1 kw in title": has_title_keyword,
+        "Word count": word_count,
     }
 
-async def process_urls_with_keywords(df, input_keywords, semaphore_limit=100):
+async def process_urls_with_keywords(df, input_keywords, title_keywords, semaphore_limit=100):
     semaphore = asyncio.Semaphore(semaphore_limit)
 
-    async def process_url(session, url, keywords):
+    async def process_url(session, url, keywords, title_keywords):
         async with semaphore:
             status, content = await fetch_url(session, url)
             if content and status == 200:
-                result = extract_sentences_from_all_tags(content, keywords)
+                result = extract_sentences_from_all_tags(content, keywords, title_keywords)
                 result["status"] = status
                 return result
-            return {"kw in text": "", "sentence": "", "sentence-1": "", "sentence+1": "", "link_inside_sentence": "", "status": status}
+            return {"kw in text": "", "sentence": "", "sentence-1": "", "sentence+1": "", "link_inside_sentence": "", "status": status, "kw in title": "", "1.1 kw in title": "","Word count":""}
 
     async with aiohttp.ClientSession() as session:
-        tasks = [process_url(session, url, input_keywords) for url in df.iloc[:, 0]]
+        tasks = [process_url(session, url, input_keywords, title_keywords) for url in df.iloc[:, 0]]
         results = await tqdm_asyncio.gather(*tasks)
     df["Response Status Code"] = [result["status"] for result in results]
-    df["Keyword in text"] = [result.get("kw in text", []) if result else [] for result in results]
+    df["kw in title"] = [result.get("kw in title") for result in results]
+    df["1.1 kw in title"] = [result.get("1.1 kw in title") for result in results]
+    df["Word count"] = [result.get("Word count") for result in results]
     df["Link inside sentence"] = [result["link_inside_sentence"] for result in results]
+    df["Keyword in text"] = [result.get("kw in text", []) if result else [] for result in results]
     df["Sentence -1"] = [result["sentence-1"] for result in results]
     df["Sentence"] = [result["sentence"] for result in results]
     df["Sentence +1"] = [result["sentence+1"] for result in results]
     return df
 
 def remove_illegal_characters(value):
-    if isinstance(value, str):
-        return ''.join(char for char in value if ord(char) >= 32 or char == '\n')
+    try:
+        if isinstance(value, list):
+            return ", ".join(map(str, value))  # Перетворюємо список на рядок
+        if isinstance(value, str):
+            return ''.join(char for char in value if ord(char) >= 32 or char == '\n')
+        if value is None:
+            return ""
+        return value
+    except IllegalCharacterError as e:
+        logging.error(f"{'>'*50}")
+        logging.error(e)
+        # logging.error(f"{'>'*50}")
+        return ""  # Return an empty string if an illegal character is detecte
+
+
+# def save_to_excel(df, output_file):
+#     df = df.applymap(remove_illegal_characters)
+#     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+#         df.to_excel(writer, index=False, sheet_name="Results")
+#     print(f"Result saved into {output_file}")
+
+def clean_cell_value(value):
+    """
+    Cleans cell values to remove illegal characters for Excel.
+    """
+    if isinstance(value, list):
+        value = f"\n{'.'*50}\n".join(map(str, value))  # Convert list to comma-separated string
+    elif value is None:
+        value = ""
+    try:
+        value = str(value)  # Convert value to string
+        value =  ''.join(char for char in value if ord(char) >= 32 or char == '\n')
+    except Exception:
+        value = "Invalid Value"
     return value
 
-def save_to_excel(df, output_file):
-    df = df.applymap(remove_illegal_characters)
-    with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Results")
-    print(f"Result saved into {output_file}")
+def format_excel_grouped_by_domain(df, output_file, adjust_columns=None, fixed_widths=None):
+    """
+    Save DataFrame to Excel with grouping by domain, shifting headers and data, and highlighting rows.
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Results"
 
-def main(input_path=None, output_file=None, input_keywords=None):
+    # Add a 'Domain' column
+    df['Domain'] = df.iloc[:, 0].apply(lambda x: x.split('/')[2] if isinstance(x, str) and '//' in x else '')
+
+    # Group data by domain
+    grouped = df.groupby('Domain')
+
+    # Style for yellow highlighting
+    yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+    bold_font = Font(bold=True)
+
+    # Insert headers with a shift
+    for col_idx, header in enumerate([""] + list(df.columns), start=1):
+        ws.cell(row=1, column=col_idx, value=header).font = bold_font
+
+    row_idx = 2
+    for domain, group in grouped:
+        # Insert domain as a header
+        ws.cell(row=row_idx, column=1, value=domain).font = bold_font
+        row_idx += 1
+
+        # Write rows for each domain
+        for _, row in group.iterrows():
+            for col_idx, value in enumerate(row[:-1], start=2):  # Skip the 'Domain' column
+                cleaned_value = clean_cell_value(value)
+                ws.cell(row=row_idx, column=col_idx, value=cleaned_value)
+
+            # Highlight rows where "Response Status Code" != 200
+            status_code = row.get("Response Status Code", 200)
+            if status_code != 200:
+                for col_idx in range(2, len(row) + 2):  # Start from column 2
+                    ws.cell(row=row_idx, column=col_idx).fill = yellow_fill
+            row_idx += 1
+
+    # Adjust column widths
+    if fixed_widths is None:
+        fixed_widths = {}  # Default: no fixed widths
+
+    for col_idx, header in enumerate(ws[1], start=1):
+        col_letter = get_column_letter(col_idx)
+
+        # Use fixed width if specified
+        if header.value in fixed_widths:
+            ws.column_dimensions[col_letter].width = fixed_widths[header.value]
+        elif col_idx == 1 and "" in fixed_widths:  # For the first column without a header
+            ws.column_dimensions[col_letter].width = fixed_widths[""]
+        elif adjust_columns is None or header.value in adjust_columns:
+            # Auto adjust width
+            max_length = 0
+            for cell in ws[col_letter]:
+                try:
+                    if cell.value:  # Check value existence
+                        max_length = max(max_length, len(str(cell.value)))
+                except Exception:
+                    pass
+            adjusted_width = max_length + 2
+            ws.column_dimensions[col_letter].width = adjusted_width
+
+    wb.save(output_file)
+    print(f"File saved to {output_file}")
+
+
+def main(input_path=None, output_file=None, input_keywords=None, title_keywords=None):
     input_path = os.path.abspath(input_path)
     output_file = os.path.abspath(output_file)
     df = read_csv_to_pandas(input_path)
-    df = process_keywords_in_url(df, input_keywords)
-    df = asyncio.run(process_urls_with_keywords(df, input_keywords))
+    df = df.rename(columns={df.columns[0]: "Website"})
+    df = asyncio.run(process_urls_with_keywords(df, input_keywords, title_keywords))
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    save_to_excel(df, output_file)
+    fixed_widths = {
+        "": 25,
+        "Website": 35,
+        "Response Status Code": 10,
+        "kw in title" : 15,
+        "1.1 kw in title": 20,
+        "Word count": 10,
+        "Keyword in text": 20,
+        "Link inside sentence": 20,
+        "Sentence": 70,
+        "Sentence -1": 70,
+        "Sentence +1": 70
+    }
+    format_excel_grouped_by_domain(df, output_file, fixed_widths=fixed_widths)
     print("*"*50)
     print(f"Results saved to: {output_file}")
     print("*"*50)
@@ -234,6 +374,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Keywords handler")
     parser.add_argument("--input_path", required=True, help="Path to csv file")
     parser.add_argument("--input_keywords", required=True, help="List of keywords if format ['word1', 'word2', ...].")
+    parser.add_argument("--title_keywords", required=True, help="List of keywords if format ['word1', 'word2', ...].")
     parser.add_argument("--output_file", required=True, help="Path & Output filename")
 
     args = parser.parse_args()
@@ -248,6 +389,7 @@ if __name__ == "__main__":
     main_args = {
         "input_path" : args.input_path,
         "output_file": args.output_file,
-        "input_keywords" : ast.literal_eval(args.input_keywords)
+        "input_keywords" : ast.literal_eval(args.input_keywords),
+        "title_keywords" : ast.literal_eval(args.title_keywords)
     }
     main(**main_args)
