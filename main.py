@@ -21,6 +21,9 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import PatternFill, Font
+from openpyxl.styles import PatternFill, Font
+from openpyxl.utils import get_column_letter
+from openpyxl.workbook import Workbook
 
 logging.getLogger('aiohttp').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning, module='aiohttp')
@@ -98,7 +101,9 @@ def extract_sentences_from_all_tags(html_content, keywords, title_keywords):
     # Remove all <script> tags with the content
     for script_tag in soup.find_all("script"):
         script_tag.decompose()
-
+    # Remove all <style> tags with the content
+    for style_tag in soup.find_all("style"):
+        style_tag.decompose()
     found_keywords = []
     matched_sentences = []
     previous_sentences = []
@@ -276,71 +281,107 @@ def clean_cell_value(value):
         value = "Invalid Value"
     return value
 
-def format_excel_grouped_by_domain(df, output_file, adjust_columns=None, fixed_widths=None):
+def format_excel_with_sheets(df, output_file, fixed_widths=None):
     """
-    Save DataFrame to Excel with grouping by domain, shifting headers and data, and highlighting rows.
+    Save DataFrame to Excel with three sheets: RAW, Group by domain, and Summary.
     """
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Results"
+
+    # Sheet 1: RAW
+    ws_raw = wb.active
+    ws_raw.title = "RAW"
+
+    # Insert RAW data
+    for col_idx, header in enumerate(df.columns, start=1):
+        ws_raw.cell(row=1, column=col_idx, value=header).font = Font(bold=True)
+    for row_idx, row in enumerate(df.itertuples(index=False), start=2):
+        for col_idx, value in enumerate(row, start=1):
+            ws_raw.cell(row=row_idx, column=col_idx, value=clean_cell_value(value))
+
+    # Sheet 2: Group by domain
+    ws_grouped = wb.create_sheet(title="Group by domain")
 
     # Add a 'Domain' column
     df['Domain'] = df.iloc[:, 0].apply(lambda x: x.split('/')[2] if isinstance(x, str) and '//' in x else '')
 
-    # Group data by domain
     grouped = df.groupby('Domain')
 
-    # Style for yellow highlighting
-    yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+    # Styles
+    green_fill = PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid")
     bold_font = Font(bold=True)
 
-    # Insert headers with a shift
-    for col_idx, header in enumerate([""] + list(df.columns), start=1):
-        ws.cell(row=1, column=col_idx, value=header).font = bold_font
+    # Insert headers
+    for col_idx, header in enumerate(["Domain"] + list(df.columns), start=1):
+        ws_grouped.cell(row=1, column=col_idx, value=header).font = bold_font
 
     row_idx = 2
     for domain, group in grouped:
-        # Insert domain as a header
-        ws.cell(row=row_idx, column=1, value=domain).font = bold_font
+        # Add domain row
+        ws_grouped.cell(row=row_idx, column=1, value=domain).font = bold_font
+        ws_grouped.row_dimensions[row_idx].fill = green_fill
+        ws_grouped.row_dimensions[row_idx].outlineLevel = 1
         row_idx += 1
 
-        # Write rows for each domain
+        # Add grouped rows
         for _, row in group.iterrows():
-            for col_idx, value in enumerate(row[:-1], start=2):  # Skip the 'Domain' column
-                cleaned_value = clean_cell_value(value)
-                ws.cell(row=row_idx, column=col_idx, value=cleaned_value)
-
-            # Highlight rows where "Response Status Code" != 200
-            status_code = row.get("Response Status Code", 200)
-            if status_code != 200:
-                for col_idx in range(2, len(row) + 2):  # Start from column 2
-                    ws.cell(row=row_idx, column=col_idx).fill = yellow_fill
+            for col_idx, value in enumerate(row, start=2):
+                ws_grouped.cell(row=row_idx, column=col_idx, value=clean_cell_value(value))
+            ws_grouped.row_dimensions[row_idx].outlineLevel = 2
             row_idx += 1
 
-    # Adjust column widths
-    if fixed_widths is None:
-        fixed_widths = {}  # Default: no fixed widths
+    df.to_csv("RawData.csv")
+    # Sheet 3: Summary
+    ws_summary = wb.create_sheet(title="Summary")
 
-    for col_idx, header in enumerate(ws[1], start=1):
-        col_letter = get_column_letter(col_idx)
+    # Domain and URL Count
+    domain_counts = df['Domain'].value_counts()
+    ws_summary.cell(row=1, column=1, value="Domain").font = bold_font
+    ws_summary.cell(row=1, column=2, value="URL Count").font = bold_font
+    ws_summary.cell(row=1, column=3, value="Keyword").font = bold_font
+    ws_summary.cell(row=1, column=4, value="Count").font = bold_font
 
-        # Use fixed width if specified
-        if header.value in fixed_widths:
-            ws.column_dimensions[col_letter].width = fixed_widths[header.value]
-        elif col_idx == 1 and "" in fixed_widths:  # For the first column without a header
-            ws.column_dimensions[col_letter].width = fixed_widths[""]
-        elif adjust_columns is None or header.value in adjust_columns:
-            # Auto adjust width
-            max_length = 0
-            for cell in ws[col_letter]:
-                try:
-                    if cell.value:  # Check value existence
-                        max_length = max(max_length, len(str(cell.value)))
-                except Exception:
-                    pass
-            adjusted_width = max_length + 2
-            ws.column_dimensions[col_letter].width = adjusted_width
+    # Aggregate keyword statistics
+    keyword_counts = (
+        df.explode("Keyword in text")
+        .groupby(["Domain", "Keyword in text"])
+        .size()
+        .reset_index(name="Count")
+        .dropna(subset=["Keyword in text"])
+    )
+    print(keyword_counts)
+    # Write summary data
+    summary_row_idx = 2
+    for domain, count in domain_counts.items():
+        # Write Domain and URL Count
+        ws_summary.cell(row=summary_row_idx, column=1, value=domain)
+        ws_summary.cell(row=summary_row_idx, column=2, value=count)
 
+        # Filter keyword stats for this domain
+        domain_keywords = keyword_counts[keyword_counts["Domain"] == domain]
+
+        # Write keyword counts
+        for _, row in domain_keywords.iterrows():
+            ws_summary.cell(row=summary_row_idx, column=3, value=row["Keyword in text"])
+            ws_summary.cell(row=summary_row_idx, column=4, value=row["Count"])
+            summary_row_idx += 1
+
+    # Adjust column widths with fixed widths
+    for ws in [ws_raw, ws_grouped, ws_summary]:
+        for col_idx, col in enumerate(ws.columns, start=1):
+            col_letter = get_column_letter(col_idx)
+            if fixed_widths and col_idx - 1 < len(fixed_widths):  # Respect fixed widths
+                column_name = ws.cell(row=1, column=col_idx).value
+                if column_name in fixed_widths:
+                    ws.column_dimensions[col_letter].width = fixed_widths[column_name]
+                else:
+                    max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+                    ws.column_dimensions[col_letter].width = max_length + 2
+            else:
+                # Auto-adjust if no fixed width specified
+                max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+                ws.column_dimensions[col_letter].width = max_length + 2
+
+    # Save the workbook
     wb.save(output_file)
     print(f"File saved to {output_file}")
 
@@ -365,7 +406,7 @@ def main(input_path=None, output_file=None, input_keywords=None, title_keywords=
         "Sentence -1": 70,
         "Sentence +1": 70
     }
-    format_excel_grouped_by_domain(df, output_file, fixed_widths=fixed_widths)
+    format_excel_with_sheets(df, output_file, fixed_widths=fixed_widths)
     print("*"*50)
     print(f"Results saved to: {output_file}")
     print("*"*50)
