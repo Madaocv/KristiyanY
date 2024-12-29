@@ -329,7 +329,7 @@ def format_excel_with_sheets(df, output_file, fixed_widths=None):
             ws_grouped.row_dimensions[row_idx].outlineLevel = 2
             row_idx += 1
 
-    df.to_csv("RawData.csv")
+    # df.to_csv("RawData.csv")
     # Sheet 3: Summary
     ws_summary = wb.create_sheet(title="Summary")
 
@@ -342,28 +342,31 @@ def format_excel_with_sheets(df, output_file, fixed_widths=None):
 
     # Aggregate keyword statistics
     keyword_counts = (
-        df.explode("Keyword in text")
+        df.explode("Keyword in text")  # Ensure lists are split into rows
+        .dropna(subset=["Keyword in text", "Domain"])  # Drop rows where 'Keyword in text' or 'Domain' is NaN
+        .query("`Keyword in text` != '' and Domain != ''")  # Remove empty strings explicitly
         .groupby(["Domain", "Keyword in text"])
         .size()
         .reset_index(name="Count")
-        .dropna(subset=["Keyword in text"])
     )
-    print(keyword_counts)
+
     # Write summary data
     summary_row_idx = 2
     for domain, count in domain_counts.items():
         # Write Domain and URL Count
-        ws_summary.cell(row=summary_row_idx, column=1, value=domain)
-        ws_summary.cell(row=summary_row_idx, column=2, value=count)
+        if domain.strip():  # Exclude domains that are empty or just whitespace
+            ws_summary.cell(row=summary_row_idx, column=1, value=domain)
+            ws_summary.cell(row=summary_row_idx, column=2, value=count)
 
-        # Filter keyword stats for this domain
-        domain_keywords = keyword_counts[keyword_counts["Domain"] == domain]
+            # Filter keyword stats for this domain
+            domain_keywords = keyword_counts[keyword_counts["Domain"] == domain]
 
-        # Write keyword counts
-        for _, row in domain_keywords.iterrows():
-            ws_summary.cell(row=summary_row_idx, column=3, value=row["Keyword in text"])
-            ws_summary.cell(row=summary_row_idx, column=4, value=row["Count"])
-            summary_row_idx += 1
+            # Write keyword counts
+            for _, row in domain_keywords.iterrows():
+                ws_summary.cell(row=summary_row_idx, column=3, value=row["Keyword in text"])
+                ws_summary.cell(row=summary_row_idx, column=4, value=row["Count"])
+                summary_row_idx += 1
+
 
     # Adjust column widths with fixed widths
     for ws in [ws_raw, ws_grouped, ws_summary]:
