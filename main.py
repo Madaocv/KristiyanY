@@ -326,6 +326,7 @@ def format_excel_with_sheets(df, output_file, fixed_widths=None):
         for _, row in group.iterrows():
             for col_idx, value in enumerate(row, start=2):
                 ws_grouped.cell(row=row_idx, column=col_idx, value=clean_cell_value(value))
+                ws_grouped.row_dimensions[row_idx].hidden = True  # Collapse these rows by default
             ws_grouped.row_dimensions[row_idx].outlineLevel = 2
             row_idx += 1
 
