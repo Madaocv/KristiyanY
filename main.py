@@ -261,12 +261,6 @@ def remove_illegal_characters(value):
         return ""  # Return an empty string if an illegal character is detecte
 
 
-# def save_to_excel(df, output_file):
-#     df = df.applymap(remove_illegal_characters)
-#     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
-#         df.to_excel(writer, index=False, sheet_name="Results")
-#     print(f"Result saved into {output_file}")
-
 def clean_cell_value(value):
     """
     Cleans cell values to remove illegal characters for Excel.
