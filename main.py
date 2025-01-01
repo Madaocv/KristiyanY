@@ -24,6 +24,7 @@ from openpyxl.styles import PatternFill, Font
 from openpyxl.styles import PatternFill, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook import Workbook
+from openpyxl.formula.translate import Translator
 
 logging.getLogger('aiohttp').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning, module='aiohttp')
@@ -281,13 +282,14 @@ def clean_cell_value(value):
         value = "Invalid Value"
     return value
 
-def format_excel_with_sheets(df, output_file, fixed_widths=None):
+def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_widths=None, delimiter=","):
     """
-    Save DataFrame to Excel with three sheets: RAW, Group by domain, and Summary.
+    Create an Excel file with RAW and Group by domain sheets.
+    The Group by domain sheet dynamically calculates values using formulas.
     """
     wb = Workbook()
 
-    # Sheet 1: RAW
+    # **Sheet 1: RAW**
     ws_raw = wb.active
     ws_raw.title = "RAW"
 
@@ -298,85 +300,81 @@ def format_excel_with_sheets(df, output_file, fixed_widths=None):
         for col_idx, value in enumerate(row, start=1):
             ws_raw.cell(row=row_idx, column=col_idx, value=clean_cell_value(value))
 
-    # Sheet 2: Group by domain
+    # **Sheet 2: Group by domain**
     ws_grouped = wb.create_sheet(title="Group by domain")
 
     # Add a 'Domain' column
-    df['Domain'] = df.iloc[:, 0].apply(lambda x: x.split('/')[2] if isinstance(x, str) and '//' in x else '')
+    df["Domain"] = df["Website"].apply(lambda x: urlparse(x).netloc if isinstance(x, str) else "")
 
-    grouped = df.groupby('Domain')
+    grouped = df.groupby("Domain")
 
-    # Styles
-    green_fill = PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid")
-    bold_font = Font(bold=True)
-
-    # Insert headers
-    for col_idx, header in enumerate(["Domain"] + list(df.columns), start=1):
-        ws_grouped.cell(row=1, column=col_idx, value=header).font = bold_font
-
-    row_idx = 2
-    for domain, group in grouped:
-        # Add domain row
-        ws_grouped.cell(row=row_idx, column=1, value=domain).font = bold_font
-        ws_grouped.row_dimensions[row_idx].fill = green_fill
-        ws_grouped.row_dimensions[row_idx].outlineLevel = 1
-        row_idx += 1
-
-        # Add grouped rows
-        for _, row in group.iterrows():
-            for col_idx, value in enumerate(row, start=2):
-                ws_grouped.cell(row=row_idx, column=col_idx, value=clean_cell_value(value))
-                ws_grouped.row_dimensions[row_idx].hidden = True  # Collapse these rows by default
-            ws_grouped.row_dimensions[row_idx].outlineLevel = 2
-            row_idx += 1
-
-    # df.to_csv("RawData.csv")
-    # Sheet 3: Summary
-    ws_summary = wb.create_sheet(title="Summary")
-
-    # Domain and URL Count
-    domain_counts = df['Domain'].value_counts()
-    ws_summary.cell(row=1, column=1, value="Domain").font = bold_font
-    ws_summary.cell(row=1, column=2, value="URL Count").font = bold_font
-    ws_summary.cell(row=1, column=3, value="Keyword").font = bold_font
-    ws_summary.cell(row=1, column=4, value="Count").font = bold_font
-
-    # Aggregate keyword statistics
+    # Calculate top keywords dynamically
     keyword_counts = (
-        df.explode("Keyword in text")  # Ensure lists are split into rows
-        .dropna(subset=["Keyword in text", "Domain"])  # Drop rows where 'Keyword in text' or 'Domain' is NaN
-        .query("`Keyword in text` != '' and Domain != ''")  # Remove empty strings explicitly
+        df.explode("Keyword in text")  # Explode lists into rows
+        .dropna(subset=["Keyword in text"])  # Remove NaN keywords
+        .query("`Keyword in text` != ''")  # Exclude empty strings
         .groupby(["Domain", "Keyword in text"])
         .size()
         .reset_index(name="Count")
     )
+    # Determine top 4 keywords across all domains
+    top_keywords = (
+        keyword_counts.groupby("Keyword in text")["Count"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(4)
+        .index.tolist()
+    )
+    # Dynamic column headers
+    headers = ["Domain", "URL Count"] + top_keywords  + list(df.columns)
+    for col_idx, header in enumerate(headers, start=1):
+        ws_grouped.cell(row=1, column=col_idx, value=header).font = Font(bold=True)
 
-    # Write summary data
-    summary_row_idx = 2
-    for domain, count in domain_counts.items():
-        # Write Domain and URL Count
-        if domain.strip():  # Exclude domains that are empty or just whitespace
-            ws_summary.cell(row=summary_row_idx, column=1, value=domain)
-            ws_summary.cell(row=summary_row_idx, column=2, value=count)
+    # Populate grouped data
+    row_idx = 2
+    for domain, group in grouped:
+        # Add domain row
+        ws_grouped.cell(row=row_idx, column=1, value=domain).font = Font(bold=True)
 
-            # Filter keyword stats for this domain
-            domain_keywords = keyword_counts[keyword_counts["Domain"] == domain]
+        # **URL Count Formula**
+        domain_formula = f'=COUNTIF(RAW!A:A{delimiter}"*{domain}*")'
+        ws_grouped.cell(row=row_idx, column=2, value=domain_formula)
 
-            # Write keyword counts
-            for _, row in domain_keywords.iterrows():
-                ws_summary.cell(row=summary_row_idx, column=3, value=row["Keyword in text"])
-                ws_summary.cell(row=summary_row_idx, column=4, value=row["Count"])
-                summary_row_idx += 1
+        # **Top Keyword Formulas**
+        for col_idx, keyword in enumerate(top_keywords, start=3):
+            # keyword_formula = f'=COUNTIFS(RAW!A:A{delimiter}"{domain}"{delimiter}RAW!G:G{delimiter}"{keyword}")'
+            keyword_formula = (
+                f'=SUMPRODUCT((ISNUMBER(SEARCH("{domain}"; RAW!A:A))) * '
+                f'(LEN(RAW!G:G) - LEN(SUBSTITUTE(RAW!G:G; "{keyword}", ""))) / LEN("{keyword}"))'
+            )
 
+            ws_grouped.cell(row=row_idx, column=col_idx, value=keyword_formula)
+
+        # Set group for collapsibility
+        ws_grouped.row_dimensions[row_idx].outlineLevel = 1
+
+        # Add grouped rows (hidden by default) starting from column 7
+        for _, row in group.iterrows():
+            row_idx += 1
+            for col_idx, value in enumerate(row, start=7):
+                ws_grouped.cell(row=row_idx, column=col_idx, value=clean_cell_value(value))
+            ws_grouped.row_dimensions[row_idx].outlineLevel = 2
+            ws_grouped.row_dimensions[row_idx].hidden = True
+
+        # Move to the next domain group
+        row_idx += 1
 
     # Adjust column widths with fixed widths
-    for ws in [ws_raw, ws_grouped, ws_summary]:
+    for ws in [ws_raw, ws_grouped]:
         for col_idx, col in enumerate(ws.columns, start=1):
             col_letter = get_column_letter(col_idx)
             if fixed_widths and col_idx - 1 < len(fixed_widths):  # Respect fixed widths
                 column_name = ws.cell(row=1, column=col_idx).value
                 if column_name in fixed_widths:
                     ws.column_dimensions[col_letter].width = fixed_widths[column_name]
+                elif fixed_widths:
+                    # Apply default width (10) for unspecified columns
+                    ws.column_dimensions[col_letter].width = 20
                 else:
                     max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
                     ws.column_dimensions[col_letter].width = max_length + 2
@@ -400,6 +398,7 @@ def main(input_path=None, output_file=None, input_keywords=None, title_keywords=
     fixed_widths = {
         "": 25,
         "Website": 35,
+        "Domain":35,
         "Response Status Code": 10,
         "kw in title" : 15,
         "1.1 kw in title": 20,
@@ -410,7 +409,7 @@ def main(input_path=None, output_file=None, input_keywords=None, title_keywords=
         "Sentence -1": 70,
         "Sentence +1": 70
     }
-    format_excel_with_sheets(df, output_file, fixed_widths=fixed_widths)
+    format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_widths=fixed_widths)
     print("*"*50)
     print(f"Results saved to: {output_file}")
     print("*"*50)
