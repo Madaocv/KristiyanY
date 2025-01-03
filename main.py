@@ -25,6 +25,7 @@ from openpyxl.styles import PatternFill, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook import Workbook
 from openpyxl.formula.translate import Translator
+from tldextract import extract
 
 logging.getLogger('aiohttp').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning, module='aiohttp')
@@ -262,9 +263,8 @@ def remove_illegal_characters(value):
 
 
 def clean_cell_value(value):
-    """
-    Cleans cell values to remove illegal characters for Excel.
-    """
+    if isinstance(value, (int, float)):
+        return value  # Directly return numbers without conversion
     if isinstance(value, list):
         value = f"\n{'.'*50}\n".join(map(str, value))  # Convert list to comma-separated string
     elif value is None:
@@ -275,6 +275,13 @@ def clean_cell_value(value):
     except Exception:
         value = "Invalid Value"
     return value
+
+def get_base_domain(url):
+    try:
+        extracted = extract(url)
+        return f"{extracted.domain}.{extracted.suffix}" if extracted.suffix else extracted.domain
+    except Exception:
+        return ""
 
 def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_widths=None, delimiter=","):
     """
@@ -292,13 +299,22 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
         ws_raw.cell(row=1, column=col_idx, value=header).font = Font(bold=True)
     for row_idx, row in enumerate(df.itertuples(index=False), start=2):
         for col_idx, value in enumerate(row, start=1):
-            ws_raw.cell(row=row_idx, column=col_idx, value=clean_cell_value(value))
+            cleaned_value = clean_cell_value(value)  # Очистка значення
+            cell = ws_raw.cell(row=row_idx, column=col_idx, value=cleaned_value)
+            
+            # Якщо значення число, встановлюємо числовий формат
+            if isinstance(cleaned_value, (int, float)):
+                cell.number_format = '0'  # Формат для цілих чисел
+            elif isinstance(cleaned_value, float):
+                cell.number_format = '0.00'  # Формат для чисел з плаваючою точкою
+
 
     # **Sheet 2: Group by domain**
     ws_grouped = wb.create_sheet(title="Group by domain")
 
     # Add a 'Domain' column
-    df["Domain"] = df["Website"].apply(lambda x: urlparse(x).netloc if isinstance(x, str) else "")
+    # df["Domain"] = df["Website"].apply(lambda x: urlparse(x).netloc if isinstance(x, str) else "")
+    df["Domain"] = df["Website"].apply(get_base_domain)
 
     grouped = df.groupby("Domain")
 
@@ -311,16 +327,10 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
         .size()
         .reset_index(name="Count")
     )
-    # Determine top 4 keywords across all domains
-    top_keywords = (
-        keyword_counts.groupby("Keyword in text")["Count"]
-        .sum()
-        .sort_values(ascending=False)
-        .head(4)
-        .index.tolist()
-    )
+    # Get all unique keywords across all domains
+    all_keywords = keyword_counts["Keyword in text"].unique().tolist()
     # Dynamic column headers
-    headers = ["Domain", "URL Count"] + top_keywords  + list(df.columns)
+    headers = ["Domain", "URL Count"] + all_keywords  + list(df.columns)
     for col_idx, header in enumerate(headers, start=1):
         ws_grouped.cell(row=1, column=col_idx, value=header).font = Font(bold=True)
 
@@ -335,7 +345,7 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
         ws_grouped.cell(row=row_idx, column=2, value=domain_formula)
 
         # **Top Keyword Formulas**
-        for col_idx, keyword in enumerate(top_keywords, start=3):
+        for col_idx, keyword in enumerate(all_keywords, start=3):
             # keyword_formula = f'=COUNTIFS(RAW!A:A{delimiter}"{domain}"{delimiter}RAW!G:G{delimiter}"{keyword}")'
             keyword_formula = (
                 f'=SUMPRODUCT((ISNUMBER(SEARCH("{domain}"; RAW!A:A))) * '
@@ -350,7 +360,7 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
         # Add grouped rows (hidden by default) starting from column 7
         for _, row in group.iterrows():
             row_idx += 1
-            for col_idx, value in enumerate(row, start=7):
+            for col_idx, value in enumerate(row, start=len(all_keywords)+3):
                 ws_grouped.cell(row=row_idx, column=col_idx, value=clean_cell_value(value))
             ws_grouped.row_dimensions[row_idx].outlineLevel = 2
             ws_grouped.row_dimensions[row_idx].hidden = True
@@ -362,20 +372,20 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
     for ws in [ws_raw, ws_grouped]:
         for col_idx, col in enumerate(ws.columns, start=1):
             col_letter = get_column_letter(col_idx)
-            if fixed_widths and col_idx - 1 < len(fixed_widths):  # Respect fixed widths
-                column_name = ws.cell(row=1, column=col_idx).value
-                if column_name in fixed_widths:
-                    ws.column_dimensions[col_letter].width = fixed_widths[column_name]
-                elif fixed_widths:
-                    # Apply default width (10) for unspecified columns
-                    ws.column_dimensions[col_letter].width = 20
-                else:
-                    max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
-                    ws.column_dimensions[col_letter].width = max_length + 2
+            # if fixed_widths and col_idx - 1 < len(fixed_widths):  # Respect fixed widths
+            column_name = ws.cell(row=1, column=col_idx).value
+            if column_name in fixed_widths:
+                ws.column_dimensions[col_letter].width = fixed_widths[column_name]
+            elif fixed_widths:
+                # Apply default width (10) for unspecified columns
+                ws.column_dimensions[col_letter].width = 20
             else:
-                # Auto-adjust if no fixed width specified
                 max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
                 ws.column_dimensions[col_letter].width = max_length + 2
+            # else:
+            #     # Auto-adjust if no fixed width specified
+            #     max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+            #     ws.column_dimensions[col_letter].width = max_length + 2
 
     # Save the workbook
     wb.save(output_file)
