@@ -134,9 +134,10 @@ Contributions are welcome! Feel free to submit issues or pull requests on the re
 ## **License**
 
 This project is licensed under the MIT License.
-
-# python main.py \
+```
+python main.py \
 --input_path="Template2-Sheet72.csv" \
 --output_file="data/5_2025.xlsx" \
 --input_keywords='["art portfolio" , "website ideas" , "idea for a website" , "website design" , "mobile-friendly design" , "restaurant website" , "website for a restaurant" , "online store" , "website builder"]' \
 --title_keywords='["art portfolio" , "website ideas" , "idea for a website" , "website design" , "mobile-friendly design" , "restaurant website" , "website for a restaurant" , "online store" , "website builder"]'
+```
