@@ -243,7 +243,7 @@ def extract_sentences_from_all_tags(html_content, keywords, title_keywords, excl
         "kw in title": found_title_keywords,
         "1.1 kw in title": has_title_keyword,
         "Word count": word_count,
-        "Keyword Count": len(copy_found_keywords)
+        "Keyword Count": len(found_keywords)
     }
 
 async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true, semaphore_limit=100):
