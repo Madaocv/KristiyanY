@@ -27,9 +27,41 @@ from openpyxl.workbook import Workbook
 from openpyxl.formula.translate import Translator
 from tldextract import extract
 import copy
+from difflib import SequenceMatcher
 
+def is_similar(sent1, sent2, threshold=0.8):
+    return SequenceMatcher(None, sent1, sent2).ratio() > threshold
 logging.getLogger('aiohttp').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning, module='aiohttp')
+
+def find_sentence_with_keyword(text, keyword):
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    pattern = r'\b' + re.escape(keyword) + r'\b'
+    matching_sentences = [
+        sentence.strip() for sentence in sentences
+        if re.search(pattern, sentence, flags=re.IGNORECASE)
+    ]
+    return matching_sentences
+
+def get_previous_sentence(text, target_sentence):
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    try:
+        index = sentences.index(target_sentence)
+        if index > 0:
+            return sentences[index - 1].strip()
+    except ValueError:
+        pass
+    return ""
+
+def get_next_sentence(text, target_sentence):
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    try:
+        index = sentences.index(target_sentence)
+        if index < len(sentences) - 1:
+            return sentences[index + 1].strip()
+    except ValueError:
+        pass
+    return ""
 
 def str_to_bool(value):
     if isinstance(value, bool):
@@ -81,18 +113,8 @@ async def fetch_url(session, url, timeout=30):
 def filter_by_indices(data, indices_to_remove):
     return [item for index, item in enumerate(data) if index not in indices_to_remove]
 
-def extract_sentences_from_all_tags(html_content, keywords, title_keywords, exclude_h_and_true):
-    """
-    Parses HTML, searches for keywords, and extracts text from the parent tag, as well as the previous and next sentences.
+def extract_sentences_from_all_tags(url,html_content, keywords, title_keywords, exclude_h_and_true):
 
-    Args:
-        html_content (str): The HTML content of the page.
-        keywords (list): A list of keywords.
-        title_keywords (list): A list of keywords to check in <h1> tags.
-
-    Returns:
-        dict: A dictionary with keywords ('kw in text') and found texts ('sentence', 'sentence-1', 'sentence+1').
-    """
     if isinstance(html_content, bytes):
         html_content = html_content.decode('utf-8', errors='ignore')
 
@@ -107,6 +129,8 @@ def extract_sentences_from_all_tags(html_content, keywords, title_keywords, excl
             "kw in title": [],
             "1.1 kw in title": False,
             "Word count": 0,
+            "KC-after": "",
+            "KC-before": ""
         }
 
     # Convert keywords and title_keywords to lowercase
@@ -180,7 +204,6 @@ def extract_sentences_from_all_tags(html_content, keywords, title_keywords, excl
         text = tag.strip().lower()
         if not text:
             continue
-
         for keyword in keywords:
             if keyword in text:
                 if tag.parent.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
@@ -205,17 +228,37 @@ def extract_sentences_from_all_tags(html_content, keywords, title_keywords, excl
 
                 for i, sentence in enumerate(sentences):
                     if keyword in sentence:
-                        matched_sentences.append(sentence.strip())
-                        found_keywords.append(keyword)
-                        link_inside_sentence.append(tag.parent.name == "a")
-
-                        # Ensure the same number of sentences for previous and next
-                        prev_sentence = sentences[i - 1].strip() if i > 0 else get_sibling_text(parent_tag, "prev")
-                        next_sentence = sentences[i + 1].strip() if i < len(sentences) - 1 else get_sibling_text(parent_tag, "next")
-
-                        previous_sentences.append(prev_sentence if prev_sentence else "")
-                        next_sentences.append(next_sentence if next_sentence else "")
-
+                        for obj in range(sentence.count(keyword)):
+                            matched_sentences.append(sentence.strip())
+                            found_keywords.append(keyword)
+                            link_inside_sentence.append(tag.parent.name == "a")
+                            # Ensure the same number of sentences for previous and next
+                            prev_sentence = sentences[i - 1].strip() if i > 0 else get_sibling_text(parent_tag, "prev")
+                            next_sentence = sentences[i + 1].strip() if i < len(sentences) - 1 else get_sibling_text(parent_tag, "next")
+                            previous_sentences.append(prev_sentence if prev_sentence else "")
+                            next_sentences.append(next_sentence if next_sentence else "")
+    # Extra check if nothin is missing
+    for obj in keywords:
+        count = len(re.findall(rf'\b{re.escape(obj)}\b', body_text, flags=re.IGNORECASE))
+        if count > found_keywords.count(obj):
+            # print("."*50)
+            # print(url)
+            count = len(re.findall(rf'\b{re.escape(obj)}\b', body_text, flags=re.IGNORECASE))
+            # print(f"---->{obj}, \n---->body text count: {count}, \n---->found_keywords count: {found_keywords.count(obj)}")
+            # print(f"---->{count - found_keywords.count(obj)}")
+            extra_results = find_sentence_with_keyword(body_text, obj)
+            for sentence in extra_results:
+                # if sentence[:-2] not in matched_sentences:
+                # if not any(is_similar(sentence[:-2], s) for s in matched_sentences):
+                if not any(is_similar(sentence[:-2], s) or s in sentence for s in matched_sentences):
+                    # print(sentence)
+                    matched_sentences.append(sentence)
+                    found_keywords.append(obj)
+                    previous_sentences.append(get_previous_sentence(body_text, sentence))
+                    next_sentences.append(get_next_sentence(body_text, sentence))
+                    link_inside_sentence.append(False)
+            #         print("-------><")
+            # print("."*50)
     # Ensure equal counts for sentences
     indexes_for_remove = [index for index, value in enumerate(link_inside_sentence) if value]
     indexes_for_remove += [index for index, value in enumerate(matched_sentences) if value.startswith('<h')]
@@ -243,7 +286,8 @@ def extract_sentences_from_all_tags(html_content, keywords, title_keywords, excl
         "kw in title": found_title_keywords,
         "1.1 kw in title": has_title_keyword,
         "Word count": word_count,
-        "Keyword Count": f"{len(copy_found_keywords)}/{len(found_keywords)}"
+        "KC-before": f"{len(copy_found_keywords)}",
+        "KC-after": f"{len(found_keywords)}"
     }
 
 async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true, semaphore_limit=100):
@@ -253,10 +297,10 @@ async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude
         async with semaphore:
             status, content = await fetch_url(session, url)
             if content and status == 200:
-                result = extract_sentences_from_all_tags(content, keywords, title_keywords, exclude_h_and_true)
+                result = extract_sentences_from_all_tags(url, content, keywords, title_keywords, exclude_h_and_true)
                 result["status"] = status
                 return result
-            return {"kw in text": "", "sentence": "", "sentence-1": "", "sentence+1": "", "link_inside_sentence": "", "status": status, "kw in title": "", "1.1 kw in title": "","Word count":"","Keyword Count":""}
+            return {"kw in text": "", "sentence": "", "sentence-1": "", "sentence+1": "", "link_inside_sentence": "", "status": status, "kw in title": "", "1.1 kw in title": "","Word count":"","KC-before":"","KC-after":""}
 
     async with aiohttp.ClientSession() as session:
         tasks = [process_url(session, url, input_keywords, title_keywords) for url in df.iloc[:, 0]]
@@ -265,7 +309,11 @@ async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude
     df["kw in title"] = [result.get("kw in title") for result in results]
     df["1.1 kw in title"] = [result.get("1.1 kw in title") for result in results]
     df["Word count"] = [result.get("Word count") for result in results]
-    df["Keyword Count"] = [result.get("Keyword Count") for result in results]
+    # df["KC-before"] = [int(result.get("KC-before")) for result in results]
+    # df["KC-after"] = [int(result.get("KC-after")) for result in results]
+    df["KC-before"] = [int(result.get("KC-before")) if result.get("KC-before") and result.get("KC-before").isdigit() else result.get("KC-before") for result in results]
+    df["KC-after"] = [int(result.get("KC-after")) if result.get("KC-after") and result.get("KC-after").isdigit() else result.get("KC-after") for result in results]
+
     df["Link inside sentence"] = [result["link_inside_sentence"] for result in results]
     df["Keyword in text"] = [result.get("kw in text", []) if result else [] for result in results]
     df["Sentence -1"] = [result["sentence-1"] for result in results]
@@ -434,7 +482,8 @@ def main(input_path=None, output_file=None, input_keywords=None, title_keywords=
         "kw in title" : 15,
         "1.1 kw in title": 20,
         "Word count": 10,
-        "Keyword Count": 10,
+        "KC-before": 10,
+        "KC-after": 10,
         "Keyword in text": 20,
         "Link inside sentence": 20,
         "Sentence": 70,
@@ -463,9 +512,13 @@ if __name__ == "__main__":
         raise ValueError('Wrong format input_keywords. Use this one ["word1", "word2", ...]') from e
 
     if args.exclude_h_and_true == True:
+        print("."*50)
         print("Excluding turn ON")
+        print("."*50)
     elif args.exclude_h_and_true == False:
+        print("."*50)
         print("Excluding turn OFF")
+        print("."*50)
 
     main_args = {
         "input_path" : args.input_path,
