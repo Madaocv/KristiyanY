@@ -26,10 +26,20 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook import Workbook
 from openpyxl.formula.translate import Translator
 from tldextract import extract
+import copy
 
 logging.getLogger('aiohttp').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning, module='aiohttp')
 
+def str_to_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value.lower() in {'true', '1', 'yes'}:
+        return True
+    elif value.lower() in {'false', '0', 'no'}:
+        return False
+    else:
+        raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
 
 def process_keywords_in_url(df, input_keywords):
     def check_keywords(value):
@@ -68,7 +78,10 @@ async def fetch_url(session, url, timeout=30):
     except Exception as e:
         return 500, None  # 500: Internal Server Error
 
-def extract_sentences_from_all_tags(html_content, keywords, title_keywords):
+def filter_by_indices(data, indices_to_remove):
+    return [item for index, item in enumerate(data) if index not in indices_to_remove]
+
+def extract_sentences_from_all_tags(html_content, keywords, title_keywords, exclude_h_and_true):
     """
     Parses HTML, searches for keywords, and extracts text from the parent tag, as well as the previous and next sentences.
 
@@ -204,6 +217,18 @@ def extract_sentences_from_all_tags(html_content, keywords, title_keywords):
                         next_sentences.append(next_sentence if next_sentence else "")
 
     # Ensure equal counts for sentences
+    indexes_for_remove = [index for index, value in enumerate(link_inside_sentence) if value]
+    indexes_for_remove += [index for index, value in enumerate(matched_sentences) if value.startswith('<h')]
+
+    copy_found_keywords = copy.deepcopy(found_keywords)
+    # clear results
+    if exclude_h_and_true:
+        link_inside_sentence = filter_by_indices(link_inside_sentence, indexes_for_remove)
+        found_keywords = filter_by_indices(found_keywords, indexes_for_remove)
+        matched_sentences = filter_by_indices(matched_sentences, indexes_for_remove)
+        previous_sentences = filter_by_indices(previous_sentences, indexes_for_remove)
+        next_sentences = filter_by_indices(next_sentences, indexes_for_remove)
+
     max_count = max(len(matched_sentences), len(previous_sentences), len(next_sentences))
     previous_sentences.extend([""] * (max_count - len(previous_sentences)))
     next_sentences.extend([""] * (max_count - len(next_sentences)))
@@ -218,19 +243,20 @@ def extract_sentences_from_all_tags(html_content, keywords, title_keywords):
         "kw in title": found_title_keywords,
         "1.1 kw in title": has_title_keyword,
         "Word count": word_count,
+        "Keyword Count": len(copy_found_keywords)
     }
 
-async def process_urls_with_keywords(df, input_keywords, title_keywords, semaphore_limit=100):
+async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true, semaphore_limit=100):
     semaphore = asyncio.Semaphore(semaphore_limit)
 
     async def process_url(session, url, keywords, title_keywords):
         async with semaphore:
             status, content = await fetch_url(session, url)
             if content and status == 200:
-                result = extract_sentences_from_all_tags(content, keywords, title_keywords)
+                result = extract_sentences_from_all_tags(content, keywords, title_keywords, exclude_h_and_true)
                 result["status"] = status
                 return result
-            return {"kw in text": "", "sentence": "", "sentence-1": "", "sentence+1": "", "link_inside_sentence": "", "status": status, "kw in title": "", "1.1 kw in title": "","Word count":""}
+            return {"kw in text": "", "sentence": "", "sentence-1": "", "sentence+1": "", "link_inside_sentence": "", "status": status, "kw in title": "", "1.1 kw in title": "","Word count":"","Keyword Count":""}
 
     async with aiohttp.ClientSession() as session:
         tasks = [process_url(session, url, input_keywords, title_keywords) for url in df.iloc[:, 0]]
@@ -239,6 +265,7 @@ async def process_urls_with_keywords(df, input_keywords, title_keywords, semapho
     df["kw in title"] = [result.get("kw in title") for result in results]
     df["1.1 kw in title"] = [result.get("1.1 kw in title") for result in results]
     df["Word count"] = [result.get("Word count") for result in results]
+    df["Keyword Count"] = [result.get("Keyword Count") for result in results]
     df["Link inside sentence"] = [result["link_inside_sentence"] for result in results]
     df["Keyword in text"] = [result.get("kw in text", []) if result else [] for result in results]
     df["Sentence -1"] = [result["sentence-1"] for result in results]
@@ -392,12 +419,12 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
     print(f"File saved to {output_file}")
 
 
-def main(input_path=None, output_file=None, input_keywords=None, title_keywords=None):
+def main(input_path=None, output_file=None, input_keywords=None, title_keywords=None, exclude_h_and_true=None):
     input_path = os.path.abspath(input_path)
     output_file = os.path.abspath(output_file)
     df = read_csv_to_pandas(input_path)
     df = df.rename(columns={df.columns[0]: "Website"})
-    df = asyncio.run(process_urls_with_keywords(df, input_keywords, title_keywords))
+    df = asyncio.run(process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true))
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     fixed_widths = {
         "": 25,
@@ -407,6 +434,7 @@ def main(input_path=None, output_file=None, input_keywords=None, title_keywords=
         "kw in title" : 15,
         "1.1 kw in title": 20,
         "Word count": 10,
+        "Keyword Count": 10,
         "Keyword in text": 20,
         "Link inside sentence": 20,
         "Sentence": 70,
@@ -424,7 +452,7 @@ if __name__ == "__main__":
     parser.add_argument("--input_keywords", required=True, help="List of keywords if format ['word1', 'word2', ...].")
     parser.add_argument("--title_keywords", required=True, help="List of keywords if format ['word1', 'word2', ...].")
     parser.add_argument("--output_file", required=True, help="Path & Output filename")
-
+    parser.add_argument("--exclude_h_and_true", type=str_to_bool, default=False, help="Exclude entries starting with '<h' or marked as True")
     args = parser.parse_args()
 
     try:
@@ -434,10 +462,16 @@ if __name__ == "__main__":
     except Exception as e:
         raise ValueError('Wrong format input_keywords. Use this one ["word1", "word2", ...]') from e
 
+    if args.exclude_h_and_true == True:
+        print("Excluding turn ON")
+    elif args.exclude_h_and_true == False:
+        print("Excluding turn OFF")
+
     main_args = {
         "input_path" : args.input_path,
         "output_file": args.output_file,
         "input_keywords" : ast.literal_eval(args.input_keywords),
-        "title_keywords" : ast.literal_eval(args.title_keywords)
+        "title_keywords" : ast.literal_eval(args.title_keywords),
+        "exclude_h_and_true": args.exclude_h_and_true
     }
     main(**main_args)
