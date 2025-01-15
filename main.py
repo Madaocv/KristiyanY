@@ -28,6 +28,18 @@ from openpyxl.formula.translate import Translator
 from tldextract import extract
 import copy
 from difflib import SequenceMatcher
+from pprint import pformat
+from textacy import preprocessing
+
+def clean_with_nlp(raw_text):
+    # Нормалізація пробілів
+    text = preprocessing.normalize.whitespace(raw_text)
+    # Видалення пунктуації
+    text = preprocessing.remove.punctuation(text)
+    text = re.sub(r'(\w+)-\s+(\w+)', r'\1\2', text)
+    text = re.sub(r'(\S)-\s+(\S)', r'\1\2', text)  # Прибирає переноси типу "revenue-\n recovery"
+    text = re.sub(r'\s+', ' ', text)  # Заміна багаторазових пробілів на один
+    return text.strip()
 
 def is_similar(sent1, sent2, threshold=0.8):
     return SequenceMatcher(None, sent1, sent2).ratio() > threshold
@@ -137,7 +149,12 @@ def extract_sentences_from_all_tags(url,html_content, keywords, title_keywords, 
     keywords = [kw.lower() for kw in keywords]
     title_keywords = [kw.lower() for kw in title_keywords]
 
-    # Remove all <script> tags with the content
+    for script_tag in soup.find_all("img"):
+        script_tag.decompose()
+
+    for script_tag in soup.find_all("noscript"):
+        script_tag.decompose()
+
     for script_tag in soup.find_all("script"):
         script_tag.decompose()
     # Remove all <style> tags with the content
@@ -156,6 +173,7 @@ def extract_sentences_from_all_tags(url,html_content, keywords, title_keywords, 
 
     # Word count in the filtered body
     body_text = soup.body.get_text(separator=" ", strip=True).lower()
+    body_text = clean_with_nlp(body_text)
     word_count = len(body_text.split())
 
     def get_sibling_text(tag, direction, max_attempts=5):
@@ -238,27 +256,19 @@ def extract_sentences_from_all_tags(url,html_content, keywords, title_keywords, 
                             previous_sentences.append(prev_sentence if prev_sentence else "")
                             next_sentences.append(next_sentence if next_sentence else "")
     # Extra check if nothin is missing
+
     for obj in keywords:
         count = len(re.findall(rf'\b{re.escape(obj)}\b', body_text, flags=re.IGNORECASE))
         if count > found_keywords.count(obj):
-            # print("."*50)
-            # print(url)
             count = len(re.findall(rf'\b{re.escape(obj)}\b', body_text, flags=re.IGNORECASE))
-            # print(f"---->{obj}, \n---->body text count: {count}, \n---->found_keywords count: {found_keywords.count(obj)}")
-            # print(f"---->{count - found_keywords.count(obj)}")
             extra_results = find_sentence_with_keyword(body_text, obj)
             for sentence in extra_results:
-                # if sentence[:-2] not in matched_sentences:
-                # if not any(is_similar(sentence[:-2], s) for s in matched_sentences):
                 if not any(is_similar(sentence[:-2], s) or s in sentence for s in matched_sentences):
-                    # print(sentence)
                     matched_sentences.append(sentence)
                     found_keywords.append(obj)
                     previous_sentences.append(get_previous_sentence(body_text, sentence))
                     next_sentences.append(get_next_sentence(body_text, sentence))
                     link_inside_sentence.append(False)
-            #         print("-------><")
-            # print("."*50)
     # Ensure equal counts for sentences
     indexes_for_remove = [index for index, value in enumerate(link_inside_sentence) if value]
     indexes_for_remove += [index for index, value in enumerate(matched_sentences) if value.startswith('<h')]
