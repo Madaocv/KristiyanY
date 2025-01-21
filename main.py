@@ -415,7 +415,10 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
     # Get all unique keywords across all domains
     all_keywords = keyword_counts["Keyword in text"].unique().tolist()
     # Dynamic column headers
-    headers = ["Domain", "URL Count"] + all_keywords  + list(df.columns)
+    # ! do not render [+]
+    # headers = ["Domain", "URL Count"] + all_keywords  + list(df.columns)
+    # ! end do not render [+]
+    headers = ["Domain", "URL Count"] + all_keywords 
     for col_idx, header in enumerate(headers, start=1):
         ws_grouped.cell(row=1, column=col_idx, value=header).font = Font(bold=True)
     # Foud column name
@@ -449,18 +452,17 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
             )
 
             ws_grouped.cell(row=row_idx, column=col_idx, value=keyword_formula)
-
-        # Set group for collapsibility
-        ws_grouped.row_dimensions[row_idx].outlineLevel = 1
-
-        # Add grouped rows (hidden by default) starting from column 7
-        for _, row in group.iterrows():
-            row_idx += 1
-            for col_idx, value in enumerate(row, start=len(all_keywords)+3):
-                ws_grouped.cell(row=row_idx, column=col_idx, value=clean_cell_value(value))
-            ws_grouped.row_dimensions[row_idx].outlineLevel = 2
-            ws_grouped.row_dimensions[row_idx].hidden = True
-
+        # ! do not render [+]
+        # # Set group for collapsibility
+        # ws_grouped.row_dimensions[row_idx].outlineLevel = 1
+        # # Add grouped rows (hidden by default) starting from column 7
+        # for _, row in group.iterrows():
+        #     row_idx += 1
+        #     for col_idx, value in enumerate(row, start=len(all_keywords)+3):
+        #         ws_grouped.cell(row=row_idx, column=col_idx, value=clean_cell_value(value))
+        #     ws_grouped.row_dimensions[row_idx].outlineLevel = 2
+        #     ws_grouped.row_dimensions[row_idx].hidden = True
+        # ! end do not render [+]
         # Move to the next domain group
         row_idx += 1
 
