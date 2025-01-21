@@ -418,7 +418,18 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
     headers = ["Domain", "URL Count"] + all_keywords  + list(df.columns)
     for col_idx, header in enumerate(headers, start=1):
         ws_grouped.cell(row=1, column=col_idx, value=header).font = Font(bold=True)
+    # Foud column name
+    keyword_col_idx = None
+    for col_idx, header in enumerate(df.columns, start=1):
+        if header == "Keyword in text":
+            keyword_col_idx = col_idx
+            break
 
+    if keyword_col_idx is None:
+        raise ValueError("Column 'Keyword in text' not found in the DataFrame.")
+
+    # Convert the column index to Excel-style column letters
+    keyword_col_letter = get_column_letter(keyword_col_idx)
     # Populate grouped data
     row_idx = 2
     for domain, group in grouped:
@@ -433,8 +444,8 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
         for col_idx, keyword in enumerate(all_keywords, start=3):
             # keyword_formula = f'=COUNTIFS(RAW!A:A{delimiter}"{domain}"{delimiter}RAW!G:G{delimiter}"{keyword}")'
             keyword_formula = (
-                f'=SUMPRODUCT((ISNUMBER(SEARCH("{domain}"; RAW!A:A))) * '
-                f'(LEN(RAW!G:G) - LEN(SUBSTITUTE(RAW!G:G; "{keyword}", ""))) / LEN("{keyword}"))'
+                f'=SUMPRODUCT((ISNUMBER(SEARCH("{domain}"; RAW!$A:$A))) * '
+                f'(LEN(RAW!${keyword_col_letter}:${keyword_col_letter}) - LEN(SUBSTITUTE(RAW!${keyword_col_letter}:${keyword_col_letter}; "{keyword}", ""))) / LEN("{keyword}"))'
             )
 
             ws_grouped.cell(row=row_idx, column=col_idx, value=keyword_formula)
