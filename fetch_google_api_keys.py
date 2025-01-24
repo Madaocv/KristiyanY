@@ -56,6 +56,7 @@ for idx, row in enumerate(data, start=2):  # Start at row 2 (header is row 1)
                 set_cell_background_color(idx, 'D', {"red": 0.0, "green": 1.0, "blue": 0.0})
             else:
                 worksheet.update_cell(idx, 4, "False")
+                set_cell_background_color(idx, 'D', {"red": 1.0, "green": 1.0, "blue": 1.0})
             worksheet.update_cell(idx, 3, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
         except requests.RequestException as e:
