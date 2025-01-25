@@ -27,7 +27,7 @@ headers = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
-# Read all data
+
 data = worksheet.get_all_records()
 
 # Helper function to update cell background color
