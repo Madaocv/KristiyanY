@@ -5,13 +5,16 @@ from pprint import pformat
 from bs4 import BeautifulSoup
 from datetime import datetime
 import time
-
-API_KEY = "AIzaSyD5-YsXKgrqc31B4n7fdw15gpUCEreb0ao"
-SEARCH_ENGINE_ID = "c4ee0b8e1875a41f0"
+import os
+from dotenv import load_dotenv
+load_dotenv()
+API_KEY = os.getenv("API_KEY")
+SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
+SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE")
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 BASE_URL = "https://www.googleapis.com/customsearch/v1"
-SERVICE_ACCOUNT_FILE = "/home/ec2-user/KristiyanY/kristiyansimeonov-de6f501229f3.json"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-SPREADSHEET_ID = "1GmsJHIFgYWe0W9VHRMzgpuyhTWXdkdUlWgg8O3QN2Uw"
+
 credentials = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
 gc = gspread.authorize(credentials)
 spreadsheet = gc.open_by_key(SPREADSHEET_ID)
@@ -36,7 +39,7 @@ def set_cell_background_color(row, col, color):
 
 # Process rows
 for idx, row in enumerate(data, start=2):  # Start at row 2 (header is row 1)
-    print(f"Start processing idx: {idx}, {len(data)-1}")
+    # print(f"Start processing idx: {idx}, {len(data)-1}")
     article = row["Article"]
     target = row["Target URL"]
     status = row["Status"]
