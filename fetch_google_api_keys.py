@@ -18,7 +18,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapi
 credentials = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
 gc = gspread.authorize(credentials)
 spreadsheet = gc.open_by_key(SPREADSHEET_ID)
-worksheet = spreadsheet.worksheet("AB Script")
+worksheet = spreadsheet.worksheet("Orders")
 articles = worksheet.col_values(1)
 target = worksheet.col_values(2)
 print(f'Scheduling start: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
