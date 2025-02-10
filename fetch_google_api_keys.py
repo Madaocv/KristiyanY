@@ -32,54 +32,39 @@ headers = {
 }
 import time
 
-def update_third_column(worksheet, row_idx, col1, col2):
-    """
-    Перевіряє значення в двох колонках і записує у 6-ту колонку True або False.
-    Фарбування:
-    - Зелений, якщо обидва значення True.
-    - Червоний, якщо хоча б одне False.
-
-    :param worksheet: Об'єкт аркуша (Google Sheets API)
-    :param row_idx: Номер рядка
-    :param col1: Номер першої колонки для перевірки
-    :param col2: Номер другої колонки для перевірки
-    """
-    # Отримуємо значення з двох колонок
-    val1 = worksheet.cell(row_idx, col1).value
-    val2 = worksheet.cell(row_idx, col2).value
-
-    # Конвертуємо значення в булевий тип (може бути рядок "TRUE", "FALSE")
+def update_third_column(worksheet, row_idx, col1_name, col2_name):
+    val1 = worksheet.cell(row_idx, list(data[0].keys()).index(col1_name) + 1).value
+    val2 = worksheet.cell(row_idx, list(data[0].keys()).index(col2_name) + 1).value
     is_true1 = str(val1).strip().lower() == "true"
     is_true2 = str(val2).strip().lower() == "true"
-
-    # Визначаємо результат для третьої колонки (6-та колонка)
     result = "True" if is_true1 and is_true2 else "False"
-
-    # Оновлюємо значення у 6-й колонці
-    worksheet.update_cell(row_idx, 7, result)
-    time.sleep(2)  # Затримка для запобігання обмеженням API
-
-    # Визначаємо колір
+    worksheet.update_cell(row_idx, list(data[0].keys()).index("Main Status") + 1, result)
+    time.sleep(1)
+    col_letter = gspread.utils.rowcol_to_a1(1, list(data[0].keys()).index("Main Status") + 1)[0]
     color = {"red": 0.0, "green": 1.0, "blue": 0.0} if result == "True" else {"red": 1.0, "green": 1.0, "blue": 1.0}
+    set_cell_background_color(row_idx, col_letter, color)
+    time.sleep(1)
 
-    # Оновлюємо колір фону
-    set_cell_background_color(row_idx, 'G', color)
-    time.sleep(2)
-
-data = worksheet.get_all_records()
-
+def update_status(worksheet, row_idx, col_name, status, color):
+    col_letter = gspread.utils.rowcol_to_a1(1, list(data[0].keys()).index(col_name) + 1)[0]
+    worksheet.update_cell(row_idx, list(data[0].keys()).index(col_name) + 1, status)
+    time.sleep(1)
+    set_cell_background_color(row_idx, col_letter, color)
+    time.sleep(1)
+data = worksheet.get_all_records(head=5)
 # Helper function to update cell background color
 def set_cell_background_color(row, col, color):
     worksheet.format(f"{col}{row}", {"backgroundColor": color})
 
 # Process rows
-for idx, row in enumerate(data, start=2):  # Start at row 2 (header is row 1)
+for idx, row in enumerate(data, start=6):  # Start at row 2 (header is row 1)
     # print(f"Start processing idx: {idx}, {len(data)-1}")
-    article = row["Article"]
+    article = row["Final"]
     target = row["Target URL"]
-    status = row["Status"]
+    status = row["URL status"]
     anchor = row["Anchor"]
     main_status = row["Main Status"]
+    anchor_status = row["Аnchor status"]
     if not main_status or main_status.strip().lower() == "false":
         try:
             response = requests.get(article, headers=headers, timeout=10)
@@ -93,38 +78,23 @@ for idx, row in enumerate(data, start=2):  # Start at row 2 (header is row 1)
             matched_texts = [soup.find_all('a', href=True)[i].get_text().strip() for i in indices]
             # FILL OUT LAST SCAN/STATUS
             if target in links:
-                worksheet.update_cell(idx, 4, "True")
-                time.sleep(2)
-                set_cell_background_color(idx, 'D', {"red": 0.0, "green": 1.0, "blue": 0.0})
-                time.sleep(2)
+                update_status(worksheet, idx, "URL status", "True", {"red": 0.0, "green": 1.0, "blue": 0.0})
             else:
-                worksheet.update_cell(idx, 4, "False")
-                time.sleep(2)
-                set_cell_background_color(idx, 'D', {"red": 1.0, "green": 1.0, "blue": 1.0})
-                time.sleep(2)
+                update_status(worksheet, idx, "URL status", "False", {"red": 1.0, "green": 1.0, "blue": 1.0})
             # UPDATE LAST SCAN DATE
-            worksheet.update_cell(idx, 3, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            time.sleep(2)
+            worksheet.update_cell(idx, list(data[0].keys()).index("Last scan date") + 1, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            time.sleep(1)
             # FILL OUT STATUS ANCHOR/ MAIN STATUS
             if not anchor:
                 continue
             if anchor and anchor in matched_texts:
-                worksheet.update_cell(idx, 6, "True")
-                time.sleep(2)
-                set_cell_background_color(idx, 'F', {"red": 0.0, "green": 1.0, "blue": 0.0})
-                time.sleep(2)
+                update_status(worksheet, idx, "Аnchor status", "True", {"red": 0.0, "green": 1.0, "blue": 0.0})
             else:
-                worksheet.update_cell(idx, 6, "False")
-                time.sleep(2)
-                set_cell_background_color(idx, 'F', {"red": 1.0, "green": 1.0, "blue": 1.0})
-                time.sleep(2)
-            update_third_column(worksheet, idx, 4, 6)
+                update_status(worksheet, idx, "Аnchor status", "False", {"red": 1.0, "green": 1.0, "blue": 1.0})
+            update_third_column(worksheet, idx, "URL status", "Аnchor status")
 
         except requests.RequestException as e:
             print(f"Error processing URL {article}: {e}")
-            worksheet.update_cell(idx, 4, "False")
-            time.sleep(2)
-            set_cell_background_color(idx, 'D', {"red": 1.0, "green": 0.0, "blue": 0.0})
-            time.sleep(2)
+            update_status(worksheet, idx, "URL status", "False", {"red": 1.0, "green": 0.0, "blue": 0.0})
             worksheet.update_cell(idx, 3, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 print(f'Scraping finished: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, Total URLs processed {len(data)-1}')
