@@ -30,6 +30,7 @@ import copy
 from difflib import SequenceMatcher
 from pprint import pformat
 from textacy import preprocessing
+from collections import Counter
 
 def clean_with_nlp(raw_text):
     # Нормалізація пробілів
@@ -101,7 +102,7 @@ def read_csv_to_pandas(file_path):
     # ows = first_column_df.iloc[1:500]
     return first_column_df
 
-async def fetch_url(session, url, timeout=120):
+async def fetch_url(session, url, timeout=60):
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -302,10 +303,12 @@ def extract_sentences_from_all_tags(url,html_content, keywords, title_keywords, 
 
 async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true, semaphore_limit=100):
     semaphore = asyncio.Semaphore(semaphore_limit)
+    response_status_counts = Counter()
 
     async def process_url(session, url, keywords, title_keywords):
         async with semaphore:
             status, content = await fetch_url(session, url)
+            response_status_counts[status] += 1
             if content and status == 200:
                 result = extract_sentences_from_all_tags(url, content, keywords, title_keywords, exclude_h_and_true)
                 result["status"] = status
@@ -329,6 +332,11 @@ async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude
     df["Sentence -1"] = [result["sentence-1"] for result in results]
     df["Sentence"] = [result["sentence"] for result in results]
     df["Sentence +1"] = [result["sentence+1"] for result in results]
+    print("\n" + "="*50)
+    print("Response Status Code Counts:")
+    for status, count in response_status_counts.items():
+        print(f"Status {status}: {count} times")
+    print("="*50 + "\n")
     return df
 
 def remove_illegal_characters(value):
