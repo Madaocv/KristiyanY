@@ -31,6 +31,22 @@ from difflib import SequenceMatcher
 from pprint import pformat
 from textacy import preprocessing
 from collections import Counter
+import random
+
+def load_proxies(proxy_file):
+    """Завантажує список проксі з файлу"""
+    proxies = []
+    try:
+        with open(proxy_file, "r") as f:
+            for line in f:
+                parts = line.strip().split(":")
+                if len(parts) == 4:  # Формат: IP:PORT:USER:PASSWORD
+                    ip, port, user, password = parts
+                    proxy_url = f"http://{user}:{password}@{ip}:{port}"
+                    proxies.append(proxy_url)
+    except FileNotFoundError:
+        print(f"[WARNING] Файл {proxy_file} не знайдено. Використовуємо запити без проксі.")
+    return proxies
 
 def clean_with_nlp(raw_text):
     # Нормалізація пробілів
@@ -102,15 +118,16 @@ def read_csv_to_pandas(file_path):
     # ows = first_column_df.iloc[1:500]
     return first_column_df
 
-async def fetch_url(session, url, timeout=60):
+async def fetch_url(session, url, proxies, timeout=60):
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Connection": "keep-alive",
     }
+    proxy = random.choice(proxies) if proxies else None
     try:
-        async with session.get(url, headers=headers, timeout=timeout) as response:
+        async with session.get(url, headers=headers, timeout=timeout, proxy=proxy) as response:
             if response.status == 200:
                 content = await response.text()
                 return response.status, content
@@ -301,13 +318,13 @@ def extract_sentences_from_all_tags(url,html_content, keywords, title_keywords, 
         "KC-after": f"{len(found_keywords)}"
     }
 
-async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true, semaphore_limit=100):
+async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true,proxies, semaphore_limit=100):
     semaphore = asyncio.Semaphore(semaphore_limit)
     response_status_counts = Counter()
 
     async def process_url(session, url, keywords, title_keywords):
         async with semaphore:
-            status, content = await fetch_url(session, url)
+            status, content = await fetch_url(session, url, proxies)
             response_status_counts[status] += 1
             if content and status == 200:
                 result = extract_sentences_from_all_tags(url, content, keywords, title_keywords, exclude_h_and_true)
@@ -498,12 +515,15 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
     print(f"File saved to {output_file}")
 
 
-def main(input_path=None, output_file=None, input_keywords=None, title_keywords=None, exclude_h_and_true=None):
+def main(input_path=None, output_file=None, input_keywords=None, title_keywords=None, exclude_h_and_true=None, proxy_file=None):
     input_path = os.path.abspath(input_path)
     output_file = os.path.abspath(output_file)
+
+    proxies = load_proxies("proxy.txt") if proxy_file else []
+
     df = read_csv_to_pandas(input_path)
     df = df.rename(columns={df.columns[0]: "Website"})
-    df = asyncio.run(process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true))
+    df = asyncio.run(process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true, proxies))
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     fixed_widths = {
         "": 25,
@@ -533,6 +553,7 @@ if __name__ == "__main__":
     parser.add_argument("--title_keywords", required=True, help="List of keywords if format ['word1', 'word2', ...].")
     parser.add_argument("--output_file", required=True, help="Path & Output filename")
     parser.add_argument("--exclude_h_and_true", type=str_to_bool, default=False, help="Exclude entries starting with '<h' or marked as True")
+    parser.add_argument("--proxy_file", type=str_to_bool, default=False, help="Path to proxy file")
     args = parser.parse_args()
 
     try:
@@ -556,6 +577,7 @@ if __name__ == "__main__":
         "output_file": args.output_file,
         "input_keywords" : ast.literal_eval(args.input_keywords),
         "title_keywords" : ast.literal_eval(args.title_keywords),
-        "exclude_h_and_true": args.exclude_h_and_true
+        "exclude_h_and_true": args.exclude_h_and_true,
+        "proxy_file": args.proxy_file
     }
     main(**main_args)
