@@ -1,37 +1,25 @@
-import pandas as pd
-import asyncio
-import aiohttp
+
 from tqdm.asyncio import tqdm_asyncio
+from bs4 import BeautifulSoup
+from openpyxl.utils import get_column_letter
+from openpyxl.utils.exceptions import IllegalCharacterError
+from openpyxl.styles import Font
+from openpyxl.workbook import Workbook
+from tldextract import extract
+from difflib import SequenceMatcher
+from textacy import preprocessing
+from collections import Counter
+import pandas as pd
 import logging
 import warnings
 import argparse
-import ast
-import aiohttp
 import asyncio
-from bs4 import BeautifulSoup
+import aiohttp
+import random
+import copy
+import ast
 import re
 import os
-from openpyxl.utils import get_column_letter
-from urllib.parse import urlparse
-from openpyxl.utils.exceptions import IllegalCharacterError
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.styles import PatternFill, Font
-import pandas as pd
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.styles import PatternFill, Font
-from openpyxl.styles import PatternFill, Font
-from openpyxl.utils import get_column_letter
-from openpyxl.workbook import Workbook
-from openpyxl.formula.translate import Translator
-from tldextract import extract
-import copy
-from difflib import SequenceMatcher
-from pprint import pformat
-from textacy import preprocessing
-from collections import Counter
-import random
 
 def load_proxies(proxy_file):
     """Завантажує список проксі з файлу"""
@@ -422,8 +410,6 @@ def format_excel_with_dynamic_grouping_and_formulas(df, output_file, fixed_width
     # **Sheet 2: Group by domain**
     ws_grouped = wb.create_sheet(title="Group by domain")
 
-    # Add a 'Domain' column
-    # df["Domain"] = df["Website"].apply(lambda x: urlparse(x).netloc if isinstance(x, str) else "")
     df["Domain"] = df["Website"].apply(get_base_domain)
 
     grouped = df.groupby("Domain")
