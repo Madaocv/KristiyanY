@@ -106,7 +106,7 @@ def read_csv_to_pandas(file_path):
     # ows = first_column_df.iloc[1:500]
     return first_column_df
 
-async def fetch_url(session, url, proxies, timeout=60):
+async def fetch_url(session, url, proxies, timeout=30):
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -306,7 +306,7 @@ def extract_sentences_from_all_tags(url,html_content, keywords, title_keywords, 
         "KC-after": f"{len(found_keywords)}"
     }
 
-async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true,proxies, semaphore_limit=100):
+async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude_h_and_true,proxies, semaphore_limit=50):
     semaphore = asyncio.Semaphore(semaphore_limit)
     response_status_counts = Counter()
 
@@ -320,7 +320,7 @@ async def process_urls_with_keywords(df, input_keywords, title_keywords, exclude
                 return result
             return {"kw in text": "", "sentence": "", "sentence-1": "", "sentence+1": "", "link_inside_sentence": "", "status": status, "kw in title": "", "1.1 kw in title": "","Word count":"","KC-before":"","KC-after":""}
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit_per_host=5, ssl=False)) as session:
         tasks = [process_url(session, url, input_keywords, title_keywords) for url in df.iloc[:, 0]]
         results = await tqdm_asyncio.gather(*tasks)
     df["Response Status Code"] = [result["status"] for result in results]
