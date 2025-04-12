@@ -3,6 +3,7 @@ from google.oauth2.service_account import Credentials
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import time
 import os
 from dotenv import load_dotenv
@@ -82,7 +83,8 @@ for idx, row in enumerate(data, start=2):  # Row 6 = data row 1
 
     # Write Last scan date
     scan_col_letter, scan_col_idx = get_col_letter("Last scan date")
-    worksheet.update_cell(idx, scan_col_idx, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    kyiv_time = datetime.now(ZoneInfo("Europe/Kyiv")).strftime("%Y-%m-%d %H:%M:%S")
+    worksheet.update_cell(idx, scan_col_idx, kyiv_time)
     time.sleep(1)
 
 print("✅ Scanning complete.")
