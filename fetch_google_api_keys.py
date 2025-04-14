@@ -60,7 +60,7 @@ def set_cell_background_color(row, col, color):
 # Process rows
 for idx, row in enumerate(data, start=6):  # Start at row 2 (header is row 1)
     # print(f"Start processing idx: {idx}, {len(data)-1}")
-    print(f"Processing row {idx}/{len(data)}: {row}")
+    print(f"Processing row {idx}/{len(data)}")
     article = row["Final"]
     target = row["Target URL"]
     status = row["URL status"]
