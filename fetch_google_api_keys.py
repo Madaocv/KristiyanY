@@ -4,6 +4,7 @@ import requests
 from pprint import pformat
 from bs4 import BeautifulSoup
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import time
 import os
 from dotenv import load_dotenv
@@ -59,6 +60,7 @@ def set_cell_background_color(row, col, color):
 # Process rows
 for idx, row in enumerate(data, start=6):  # Start at row 2 (header is row 1)
     # print(f"Start processing idx: {idx}, {len(data)-1}")
+    print(f"Processing row {idx}/{len(data)}: {row}")
     article = row["Final"]
     target = row["Target URL"]
     status = row["URL status"]
@@ -82,16 +84,20 @@ for idx, row in enumerate(data, start=6):  # Start at row 2 (header is row 1)
             else:
                 update_status(worksheet, idx, "URL status", "False", {"red": 1.0, "green": 1.0, "blue": 1.0})
             # UPDATE LAST SCAN DATE
-            worksheet.update_cell(idx, list(data[0].keys()).index("Last scan date") + 1, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            kyiv_time = datetime.now(ZoneInfo("Europe/Kyiv")).strftime("%Y-%m-%d %H:%M:%S")
+            worksheet.update_cell(idx, list(data[0].keys()).index("Last scan date") + 1, kyiv_time)
             time.sleep(1)
             # FILL OUT STATUS ANCHOR/ MAIN STATUS
             if not anchor:
                 continue
             if anchor and anchor in matched_texts:
                 update_status(worksheet, idx, "Аnchor status", "True", {"red": 0.0, "green": 1.0, "blue": 0.0})
+                time.sleep(1)
             else:
                 update_status(worksheet, idx, "Аnchor status", "False", {"red": 1.0, "green": 1.0, "blue": 1.0})
+                time.sleep(1)
             update_third_column(worksheet, idx, "URL status", "Аnchor status")
+            time.sleep(1)
 
         except requests.RequestException as e:
             print(f"Error processing URL {article}: {e}")
