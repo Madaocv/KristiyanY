@@ -71,7 +71,7 @@ for idx, row in enumerate(data, start=2):  # Row 6 = data row 1
         else:
             soup = BeautifulSoup(response.text, "html.parser")
             links = [a['href'] for a in soup.find_all('a', href=True)]
-            status = "Live" if any(target_url in item for item in links) else "Not Found"
+            status = "Live" if any(target_url in item or target_url.rstrip('/') == item.rstrip('/') for item in links) else "Not Found"
     except Exception:
         status = "Bad Request"
 
