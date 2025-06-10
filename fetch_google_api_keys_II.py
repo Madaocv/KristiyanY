@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import time
 import os
 import re
+import random
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 
@@ -108,13 +109,39 @@ colors = {
     "Connection Error": {"red": 1.0, "green": 0.6, "blue": 0.0}  # Orange
 }
 
+# Load proxies
+proxy_list = []
+try:
+    with open('proxy.txt', 'r') as f:
+        for line in f:
+            if line.strip():
+                parts = line.strip().split(':')
+                if len(parts) == 4:  # Format: IP:PORT:USERNAME:PASSWORD
+                    proxy = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
+                    proxy_list.append(proxy)
+    print(f"Loaded {len(proxy_list)} proxies")
+except Exception as e:
+    print(f"Warning: Could not load proxies: {str(e)}")
+
 # Process each row
 for idx, row in enumerate(data, start=2):  # Row 6 = data row 1
     article_url = row.get("URL")
     target_url = row.get("Search for these URLs")
+    
+    # Select a proxy if available
+    proxy = None
+    if proxy_list:
+        proxy = random.choice(proxy_list)
+        proxies = {"http": proxy, "https": proxy}
 
     try:
-        response = requests.get(article_url, headers=headers, timeout=20)
+        # Make request with proxy if available
+        if proxy_list:
+            response = requests.get(article_url, headers=headers, proxies=proxies, timeout=20)
+            print(f"Row {idx}: Using proxy {proxy.split('@')[1] if '@' in proxy else proxy}")
+        else:
+            response = requests.get(article_url, headers=headers, timeout=20)
+            
         if response.status_code != 200:
             status = f"Bad Request ({response.status_code})"
         else:
@@ -125,9 +152,10 @@ for idx, row in enumerate(data, start=2):  # Row 6 = data row 1
             matched_links = [link for link in links if is_url_match(target_url, link)]
             status = "Live" if matched_links else "Not Found"
             
-            # For debugging, you could uncomment this to see which URLs matched
-            # if matched_links:
-            #     print(f"Target: {target_url} matched with: {matched_links}")
+            print(f"Row {idx}: {'MATCHED' if matched_links else 'NO MATCH'} - {article_url} -> {target_url}")
+            if matched_links:
+                print(f"  Matched with: {matched_links[0]}" + (f" and {len(matched_links)-1} others" if len(matched_links) > 1 else ""))
+            print(f"  Found {len(links)} links on page")
     except requests.exceptions.ConnectionError:
         status = "Connection Error"
     except Exception as e:
