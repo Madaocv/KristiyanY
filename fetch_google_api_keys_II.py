@@ -6,6 +6,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import time
 import os
+import re
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -52,11 +54,58 @@ def get_col_letter(name):
 def set_cell_background_color(row, col_letter, color):
     worksheet.format(f"{col_letter}{row}", {"backgroundColor": color})
 
+# Helper: Normalize URL for comparison
+def normalize_url(url):
+    """Normalize URLs for more flexible matching."""
+    if not url:
+        return ""
+    
+    # Remove protocol prefix (http://, https://)
+    url = re.sub(r'^https?://', '', url.lower())
+    
+    # Remove trailing slashes
+    url = url.rstrip('/')
+    
+    # Remove 'www.' prefix if present
+    url = re.sub(r'^www\.', '', url)
+    
+    return url
+
+# Helper: Check if one URL is contained in another
+def is_url_match(target_url, article_link):
+    """Check if target_url is contained within article_link using path-based matching."""
+    if not target_url or not article_link:
+        return False
+        
+    norm_target = normalize_url(target_url)
+    norm_article = normalize_url(article_link)
+    
+    # Check if normalized URLs are an exact match
+    if norm_target == norm_article:
+        return True
+    
+    # Check if the target's domain and path are contained in the article link
+    # Extract domains to check for domain match
+    target_domain = urlparse('http://' + norm_target).netloc or norm_target.split('/')[0]
+    article_domain = urlparse('http://' + norm_article).netloc or norm_article.split('/')[0]
+    
+    # If domains match, check if the path is contained
+    if target_domain == article_domain:
+        target_path = '/'.join(norm_target.split('/')[1:]) if '/' in norm_target else ''
+        article_path = '/'.join(norm_article.split('/')[1:]) if '/' in norm_article else ''
+        
+        # Check if target path is in article path or vice versa
+        return (target_path in article_path) or (article_path in target_path)
+    
+    # Check if full target URL is contained in article URL
+    return norm_target in norm_article
+
 # Status colors
 colors = {
     "Live": {"red": 0.0, "green": 1.0, "blue": 0.0},        # Green
     "Not Found": {"red": 1.0, "green": 0.0, "blue": 0.0},   # Red
-    "Bad Request": {"red": 0.7, "green": 0.7, "blue": 0.7}  # Grey
+    "Bad Request": {"red": 0.7, "green": 0.7, "blue": 0.7},  # Grey
+    "Connection Error": {"red": 1.0, "green": 0.6, "blue": 0.0}  # Orange
 }
 
 # Process each row
@@ -67,13 +116,22 @@ for idx, row in enumerate(data, start=2):  # Row 6 = data row 1
     try:
         response = requests.get(article_url, headers=headers, timeout=20)
         if response.status_code != 200:
-            status = "Bad Request"
+            status = f"Bad Request ({response.status_code})"
         else:
             soup = BeautifulSoup(response.text, "html.parser")
             links = [a['href'] for a in soup.find_all('a', href=True)]
-            status = "Live" if any(target_url in item or target_url.rstrip('/') == item.rstrip('/') for item in links) else "Not Found"
-    except Exception:
-        status = "Bad Request"
+            
+            # Check if any link matches the target URL using our smart matching function
+            matched_links = [link for link in links if is_url_match(target_url, link)]
+            status = "Live" if matched_links else "Not Found"
+            
+            # For debugging, you could uncomment this to see which URLs matched
+            # if matched_links:
+            #     print(f"Target: {target_url} matched with: {matched_links}")
+    except requests.exceptions.ConnectionError:
+        status = "Connection Error"
+    except Exception as e:
+        status = f"Bad Request ({str(e)[:30]})"
 
     # Write Status
     status_col_letter, status_col_idx = get_col_letter("Status")
