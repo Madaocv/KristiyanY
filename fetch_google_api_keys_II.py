@@ -132,6 +132,8 @@ for idx, row in enumerate(data, start=2):  # Row 6 = data row 1
         status = "Connection Error"
     except Exception as e:
         status = f"Bad Request ({str(e)[:30]})"
+    finally:
+        print(f"Processed row {idx}/{len(data)}")
 
     # Write Status
     status_col_letter, status_col_idx = get_col_letter("Status")
