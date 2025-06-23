@@ -53,6 +53,16 @@ def get_col_letter(name):
 
 # Helper: Color a cell
 def set_cell_background_color(row, col_letter, color):
+    # Check if color is a string (status) or a color dict
+    if isinstance(color, str):
+        # Try to find a matching color based on the status
+        for status_key, color_value in colors.items():
+            if status_key in color:
+                color = color_value
+                break
+        else:
+            # Default to grey if no match is found
+            color = colors["Bad Request"]
     worksheet.format(f"{col_letter}{row}", {"backgroundColor": color})
 
 # Helper: Normalize URL for comparison
@@ -166,7 +176,7 @@ for idx, row in enumerate(data, start=2):  # Row 6 = data row 1
     # Write Status
     status_col_letter, status_col_idx = get_col_letter("Status")
     worksheet.update_cell(idx, status_col_idx, status)
-    set_cell_background_color(idx, status_col_letter, colors[status])
+    set_cell_background_color(idx, status_col_letter, status)
     time.sleep(1)
 
     # Write Last scan date
