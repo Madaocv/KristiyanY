@@ -175,14 +175,33 @@ for idx, row in enumerate(data, start=2):  # Row 6 = data row 1
 
     # Write Status
     status_col_letter, status_col_idx = get_col_letter("Status")
-    worksheet.update_cell(idx, status_col_idx, status)
-    set_cell_background_color(idx, status_col_letter, status)
-    time.sleep(1)
+    try:
+        worksheet.update_cell(idx, status_col_idx, status)
+        set_cell_background_color(idx, status_col_letter, status)
+        time.sleep(3)  # Increased delay to avoid rate limiting
+    except gspread.exceptions.APIError as e:
+        if "Quota exceeded" in str(e):
+            print(f"Rate limit hit. Waiting 30 seconds before retrying...")
+            time.sleep(30)  # Wait longer if we hit a rate limit
+            worksheet.update_cell(idx, status_col_idx, status)  # Try again
+            set_cell_background_color(idx, status_col_letter, status)
+            time.sleep(5)  # Additional delay after recovery
+        else:
+            raise  # Re-raise if it's not a quota issue
 
     # Write Last scan date
     scan_col_letter, scan_col_idx = get_col_letter("Last scan date")
     kyiv_time = datetime.now(ZoneInfo("Europe/Kyiv")).strftime("%Y-%m-%d %H:%M:%S")
-    worksheet.update_cell(idx, scan_col_idx, kyiv_time)
-    time.sleep(1)
+    try:
+        worksheet.update_cell(idx, scan_col_idx, kyiv_time)
+        time.sleep(3)  # Increased delay to avoid rate limiting
+    except gspread.exceptions.APIError as e:
+        if "Quota exceeded" in str(e):
+            print(f"Rate limit hit. Waiting 30 seconds before retrying...")
+            time.sleep(30)  # Wait longer if we hit a rate limit
+            worksheet.update_cell(idx, scan_col_idx, kyiv_time)  # Try again
+            time.sleep(5)  # Additional delay after recovery
+        else:
+            raise  # Re-raise if it's not a quota issue
 
 print("✅ Scanning complete.")
