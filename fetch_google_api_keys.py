@@ -52,7 +52,14 @@ def update_status(worksheet, row_idx, col_name, status, color):
     time.sleep(1)
     set_cell_background_color(row_idx, col_letter, color)
     time.sleep(1)
-data = worksheet.get_all_records(head=5)
+# Use expected_headers to bypass the uniqueness check
+expected_headers = ['Data', 'Status1', 'Updated', 'Notes', 'Main Status', 'Owner', 
+                   'Sent by', 'Channel/Platform', 'Reseller', 'Orders sheet', 
+                   'Communication', 'Type', 'Anchor screen', 'Anchor', 'Target URL', 
+                   'Final', 'Аnchor status', 'URL status', 'Last scan date']
+print("Loading data with expected_headers...")
+data = worksheet.get_all_records(head=5, expected_headers=expected_headers)
+print(f"✓ Success! Loaded {len(data)} rows")
 # Helper function to update cell background color
 def set_cell_background_color(row, col, color):
     worksheet.format(f"{col}{row}", {"backgroundColor": color})
